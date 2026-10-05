@@ -48,3 +48,7 @@ LogTemp: [CppBridge] Hello, Xingcheng! C++ is working.
 也可以搜索 `Say Hello` 或分类 `Cpp Bridge`；必要时暂时取消右键菜单中的 `Context Sensitive（情境关联）`。
 
 实现方式参考 Epic 的 [UE 5.1 Blueprint Function Libraries 文档](https://dev.epicgames.com/documentation/en-us/unreal-engine/blueprint-function-libraries-in-unreal-engine?application_version=5.1)。
+
+## 程序 A：经营逻辑接入
+
+完整 C++ 服务、七张 Prototype 数据表、蓝图接线步骤和未定稿内容见 [程序 A C++ 接入说明](Docs/程序A_C++接入说明.md)。现有程序 B UI 仍需按文档连接接口；本节不代表已完成可直接游玩的整套界面。
