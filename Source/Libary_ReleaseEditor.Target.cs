@@ -10,6 +10,6 @@ public class Libary_ReleaseEditorTarget : TargetRules
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.V2;
 
-		ExtraModuleNames.AddRange( new string[] { "Libary_Release" } );
+		ExtraModuleNames.AddRange( new string[] { "Libary_Release", "Libary_ReleaseEditor" } );
 	}
 }

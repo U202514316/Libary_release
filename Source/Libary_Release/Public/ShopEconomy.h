@@ -1,0 +1,18 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "ShopTypes.h"
+
+/** Value-model operations. The coordinator owns phase checks and commits the run copy. */
+namespace ShopEconomy
+{
+    LIBARY_RELEASE_API void Reset(FShopRunState& State, const FShopCatalog& Catalog);
+    LIBARY_RELEASE_API bool AddMoney(FShopRunState& State, int32 Delta, FText& Error, bool bRequireFunds = false);
+    LIBARY_RELEASE_API bool Restock(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, FText& Error);
+    LIBARY_RELEASE_API bool Collect(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, FText& Error);
+    LIBARY_RELEASE_API bool Read(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, FText& Error);
+    LIBARY_RELEASE_API EShopActionResult Sell(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, const FCustomerRuntime& Customer, FText& Error);
+    LIBARY_RELEASE_API bool HasMatchingStock(const FShopRunState& State, const FShopCatalog& Catalog, EBookType Type, EBookLayer Layer);
+    LIBARY_RELEASE_API bool PayRent(FShopRunState& State, const FRunRules& Rules, FText& Error);
+    LIBARY_RELEASE_API int32 TotalStock(const FShopRunState& State);
+}
