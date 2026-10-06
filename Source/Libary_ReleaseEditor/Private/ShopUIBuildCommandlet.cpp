@@ -1,0 +1,821 @@
+#include "ShopUIBuildCommandlet.h"
+#include "ShopUIAuthoring.h"
+#include "ShopUIData.h"
+#include "ShopBlueprintLibrary.h"
+#include "ShopPresentationLibrary.h"
+#include "ShopPlayerController.h"
+#include "ShopGameMode.h"
+#include "ShopRunSubsystem.h"
+#include "ShopService.h"
+#include "ShopView.h"
+#include "WidgetBlueprint.h"
+#include "Blueprint/WidgetTree.h"
+#include "Blueprint/WidgetBlueprintGeneratedClass.h"
+#include "Components/Border.h"
+#include "Components/Button.h"
+#include "Components/ButtonSlot.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
+#include "Components/Image.h"
+#include "Components/ScaleBox.h"
+#include "Components/ScaleBoxSlot.h"
+#include "Components/ScrollBox.h"
+#include "Components/SizeBox.h"
+#include "Components/TextBlock.h"
+#include "Components/VerticalBox.h"
+#include "Components/VerticalBoxSlot.h"
+#include "Components/WidgetSwitcher.h"
+#include "Components/WrapBox.h"
+#include "Components/WrapBoxSlot.h"
+#include "EdGraphSchema_K2.h"
+#include "K2Node_CallFunction.h"
+#include "K2Node_ComponentBoundEvent.h"
+#include "K2Node_CustomEvent.h"
+#include "K2Node_Event.h"
+#include "K2Node_FunctionEntry.h"
+#include "K2Node_IfThenElse.h"
+#include "K2Node_Message.h"
+#include "K2Node_Self.h"
+#include "K2Node_VariableGet.h"
+#include "K2Node_VariableSet.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#include "Kismet2/KismetEditorUtilities.h"
+#include "Kismet/KismetMathLibrary.h"
+#include "Kismet/KismetSystemLibrary.h"
+#include "Engine/Texture2D.h"
+#include "Engine/World.h"
+#include "Engine/BlueprintGeneratedClass.h"
+#include "GameFramework/WorldSettings.h"
+#include "Factories/WorldFactory.h"
+#include "Factories/TextureFactory.h"
+#include "Exporters/TextureExporterPNG.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Misc/ConfigCacheIni.h"
+#include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
+#include "UObject/Package.h"
+#include "UObject/UnrealType.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogShopUIBuild, Log, All);
+
+namespace
+{
+    using namespace ShopUIAuthoring;
+    const FString UIAssetRoot = TEXT("/Game/ProgramA/UI/");
+    const TCHAR* Exterior = TEXT("/Game/美术/e80be4e9b35318b64ec6a0937ef26df9.e80be4e9b35318b64ec6a0937ef26df9");
+    const TCHAR* Front = TEXT("/Game/美术/场景/61FF784AC840979E4363B90835032205.61FF784AC840979E4363B90835032205");
+    const TCHAR* Merchant = TEXT("/Game/美术/场景/1013C4D912E4D16C8E286BB1A00C8DA9.1013C4D912E4D16C8E286BB1A00C8DA9");
+    const TCHAR* Inner = TEXT("/Game/美术/场景/F0F1B1E923EDE78AD2C8F93A3AC70F92.F0F1B1E923EDE78AD2C8F93A3AC70F92");
+    const TCHAR* OwlPath = TEXT("/Game/ProgramA/UI/Art/T_OwlGuide.T_OwlGuide");
+    const FLinearColor Ink(0.08f,0.105f,0.115f,1.f), Cream(0.92f,0.85f,0.69f,1.f);
+    const FLinearColor Gold(0.65f,0.43f,0.16f,1.f), Night(0.045f,0.055f,0.10f,0.94f);
+    bool Rebuild = false;
+    bool Good = true;
+    UBlueprint* Flow = nullptr;
+    TArray<UBlueprint*> Authored;
+    TArray<FName> OrdinaryIds, SecretIds;
+    TMap<FName,UTexture2D*> CoverTextures;
+    TMap<FName,UTexture2D*> ProvidedTextures;
+    TMap<FName,UTexture2D*> CharacterTextures;
+
+    void Require(bool Value, const FString& Why)
+    {
+        if (!Value) { Good = false; UE_LOG(LogShopUIBuild, Error, TEXT("%s"), *Why); }
+    }
+    UEdGraphPin* Pin(UEdGraphNode* Node, FName Name) { return Node ? Node->FindPin(Name) : nullptr; }
+    void Wire(UEdGraphNode* A, FName Out, UEdGraphNode* B, FName In) { Require(Link(A,Out,B,In), TEXT("Cannot wire graph")); }
+    void Next(UEdGraphNode* A, UEdGraphNode* B) { Wire(A,UEdGraphSchema_K2::PN_Then,B,UEdGraphSchema_K2::PN_Execute); }
+
+    UWidgetBlueprint* Begin(const TCHAR* Relative)
+    {
+        UWidgetBlueprint* BP = CreateWidgetAsset(UIAssetRoot + Relative);
+        if (!BP) { Good=false; return nullptr; }
+        if (BP->WidgetTree->RootWidget)
+        {
+            Require(Rebuild, FString::Printf(TEXT("Asset exists; use -Rebuild only for these generated assets: %s"), *BP->GetPathName()));
+            if (!Rebuild) return nullptr;
+            BP->Bindings.Reset(); BP->NewVariables.Reset(); BP->ImplementedInterfaces.Reset();
+            BP->UbergraphPages.Reset(); BP->FunctionGraphs.Reset(); BP->DelegateSignatureGraphs.Reset();
+            BP->WidgetTree->Rename(nullptr, GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional);
+            BP->WidgetTree = NewObject<UWidgetTree>(BP, TEXT("WidgetTree"), RF_Transactional);
+            // Rebuild the skeleton after removing old members, before reusing their names.
+            // Otherwise AddMemberVariable still sees the former BookId/DialogueIndex properties.
+            Require(Compile(BP),TEXT("Clear previous widget skeleton"));
+        }
+        BP->BlueprintDescription = TEXT("Editable UMG layout and Blueprint event graph. Business authority: ShopRunSubsystem. Generated by ShopUIBuild; edit normally after generation.");
+        Authored.Add(BP);
+        return BP;
+    }
+    void Finish(UBlueprint* BP)
+    {
+        Require(BP && Compile(BP), TEXT("Blueprint compile failed"));
+        if (Good) Require(Save(BP), TEXT("Blueprint save failed"));
+    }
+    template<class T> T* W(UWidgetBlueprint* BP, FName Name)
+    {
+        T* Widget = BP->WidgetTree->ConstructWidget<T>(T::StaticClass(), Name);
+        Widget->bIsVariable = true;
+        return Widget;
+    }
+    UCanvasPanelSlot* Place(UCanvasPanel* Canvas, UWidget* Child, float X,float Y,float Width,float Height,int32 Z=0)
+    {
+        UCanvasPanelSlot* Slot=Canvas->AddChildToCanvas(Child);
+        Slot->SetPosition(FVector2D(X,Y)); Slot->SetSize(FVector2D(Width,Height)); Slot->SetZOrder(Z); return Slot;
+    }
+    UBorder* Block(UWidgetBlueprint* BP,UCanvasPanel* Canvas,FName Name,float X,float Y,float Width,float Height,FLinearColor Color,int32 Z=0)
+    {
+        UBorder* B=W<UBorder>(BP,Name); B->SetBrushColor(Color); B->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+        Place(Canvas,B,X,Y,Width,Height,Z); return B;
+    }
+    UTextBlock* Text(UWidgetBlueprint* BP,FName Name,const FString& Value,int32 Size=24,FLinearColor Color=Cream)
+    {
+        UTextBlock* T=W<UTextBlock>(BP,Name); T->SetText(FText::FromString(Value));
+        FSlateFontInfo Font=T->GetFont(); Font.Size=Size; T->SetFont(Font);
+        T->SetColorAndOpacity(FSlateColor(Color)); T->SetAutoWrapText(true);
+        T->SetVisibility(ESlateVisibility::HitTestInvisible); return T;
+    }
+    UTextBlock* Label(UWidgetBlueprint* BP,UCanvasPanel* Canvas,FName Name,const FString& Value,float X,float Y,float Width,float Height,int32 Size=24,FLinearColor Color=Cream)
+    {
+        UTextBlock* T=Text(BP,Name,Value,Size,Color); Place(Canvas,T,X,Y,Width,Height,3); return T;
+    }
+    void WrapText(UTextBlock* Widget,float Width)
+    {
+        Widget->SetAutoWrapText(false);
+        // UE5.1 exposes WrapTextAt to the Designer but has no public setter.
+        FFloatProperty* Property=FindFProperty<FFloatProperty>(Widget->GetClass(),TEXT("WrapTextAt"));
+        Require(Property!=nullptr,TEXT("Text wrapping property"));
+        if(Property)Property->SetPropertyValue_InContainer(Widget,Width);
+    }
+    UButton* Button(UWidgetBlueprint* BP,FName Name,const FString& Value)
+    {
+        UButton* B=W<UButton>(BP,Name); B->SetBackgroundColor(Gold);
+        UTextBlock* T=Text(BP,FName(*(Name.ToString()+TEXT("_Caption"))),Value,24,Cream);
+        T->SetJustification(ETextJustify::Center);
+        CastChecked<UButtonSlot>(B->AddChild(T))->SetPadding(FMargin(12,8)); return B;
+    }
+    UButton* HitArea(UWidgetBlueprint* BP,FName Name)
+    {
+        UButton* B=W<UButton>(BP,Name);
+        FButtonStyle Style;
+        Style.Normal.DrawAs=ESlateBrushDrawType::NoDrawType;
+        Style.Hovered.DrawAs=ESlateBrushDrawType::NoDrawType;
+        Style.Pressed.DrawAs=ESlateBrushDrawType::NoDrawType;
+        Style.Disabled.DrawAs=ESlateBrushDrawType::NoDrawType;
+        B->SetStyle(Style); return B;
+    }
+    void ImportOwl()
+    {
+        const FString PackagePath=UIAssetRoot+TEXT("Art/T_OwlGuide");
+        if(FPackageName::DoesPackageExist(PackagePath))return;
+        const FString Source=FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()/TEXT("SourceArt/UI/OwlGuide.png"));
+        UTextureFactory* Factory=NewObject<UTextureFactory>();
+        UTexture2D* Texture=Cast<UTexture2D>(UFactory::StaticImportObject(UTexture2D::StaticClass(),CreatePackage(*PackagePath),TEXT("T_OwlGuide"),RF_Public|RF_Standalone,*Source,nullptr,Factory));
+        Require(Texture!=nullptr,TEXT("Import supplied owl artwork"));
+        if(!Texture)return;
+        Texture->LODGroup=TEXTUREGROUP_UI; Texture->CompressionSettings=TC_EditorIcon;
+        Texture->MipGenSettings=TMGS_NoMipmaps; Texture->SRGB=true; Texture->NeverStream=true;
+        Texture->PostEditChange(); Require(Save(Texture),TEXT("Save owl portrait"));
+        FAssetRegistryModule::AssetCreated(Texture);
+    }
+    UTexture2D* ImportTexture(const FString& Source,const FString& PackagePath,bool Cover=false,bool SingleImage=false)
+    {
+        const FString AssetName=FPackageName::GetLongPackageAssetName(PackagePath);
+        UTexture2D* Existing=nullptr;
+        if(FPackageName::DoesPackageExist(PackagePath))
+        {
+            Existing=LoadObject<UTexture2D>(nullptr,*(PackagePath+TEXT(".")+AssetName));
+            if(!SingleImage || (Existing && Existing->Source.GetNumBlocks()==1 && !Existing->VirtualTextureStreaming))return Existing;
+            // Repair only these supplied portraits if a numbered PNG was previously treated as UDIM.
+        }
+        UTextureFactory* Factory=NewObject<UTextureFactory>();
+        if(SingleImage) {Factory->UdimRegexPattern=TEXT("^$"); UTextureFactory::SuppressImportOverwriteDialog(true);}
+        UTexture2D* Texture=Cast<UTexture2D>(UFactory::StaticImportObject(UTexture2D::StaticClass(),CreatePackage(*PackagePath),*AssetName,RF_Public|RF_Standalone,*Source,nullptr,Factory));
+        Require(Texture!=nullptr,TEXT("Import provided artwork: ")+Source);
+        if(!Texture)return nullptr;
+        Texture->LODGroup=TEXTUREGROUP_UI; Texture->CompressionSettings=TC_EditorIcon;
+        Texture->MipGenSettings=TMGS_NoMipmaps; Texture->SRGB=true; Texture->NeverStream=true;
+        if(SingleImage)Texture->VirtualTextureStreaming=false;
+        // Preserve the full source; only limit the runtime thumbnail resource.
+        if(Cover)Texture->MaxTextureSize=1024;
+        Texture->PostEditChange(); Require(Save(Texture),TEXT("Save supplied art: ")+PackagePath);
+        if(!Existing)FAssetRegistryModule::AssetCreated(Texture); return Texture;
+    }
+    void ImportProvidedArt()
+    {
+        FString Json; TSharedPtr<FJsonObject> Manifest;
+        const FString Directory=FPaths::ProjectDir()/TEXT("SourceArt/UI/Provided");
+        if(!FFileHelper::LoadFileToString(Json,*(Directory/TEXT("book_cover_manifest.json"))) ||
+            !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),Manifest) || !Manifest.IsValid())
+        { Require(false,TEXT("Read provided book-cover mapping")); return; }
+        const TArray<TSharedPtr<FJsonValue>>* Rows=nullptr;
+        if(!Manifest->TryGetArrayField(TEXT("rows"),Rows)) {Require(false,TEXT("Cover manifest rows"));return;}
+        for(const TSharedPtr<FJsonValue>& Entry:*Rows)
+        {
+            const TSharedPtr<FJsonObject> Row=Entry->AsObject();
+            if(!Row.IsValid()) {Require(false,TEXT("Invalid cover mapping row"));continue;}
+            FString Id,Relative;
+            if(!Row->TryGetStringField(TEXT("book_id"),Id)||!Row->TryGetStringField(TEXT("relative_source_path"),Relative))
+            {Require(false,TEXT("Missing portable cover mapping fields"));continue;}
+            CoverTextures.Add(FName(*Id),ImportTexture(FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()/Relative),UIAssetRoot+TEXT("Art/BookCovers/T_")+Id,true));
+        }
+        const TCHAR* Names[]={TEXT("T_Dialogue"),TEXT("T_DialoguePlain"),TEXT("T_DialogueName"),TEXT("T_DialogueNext"),TEXT("T_HUDMoney"),TEXT("T_HUDStock"),TEXT("T_HUDPsychic"),TEXT("T_HUDPollutionIcon"),TEXT("T_HUDEnlightenIcon")};
+        const TCHAR* Files[]={TEXT("对话框/对话框.png"),TEXT("对话框/对话框没名字纯享.png"),TEXT("对话框/名字的框.png"),TEXT("对话框/退出.png"),TEXT("顶栏/金钱.png"),TEXT("顶栏/库存.png"),TEXT("顶栏/灵能2.png"),TEXT("顶栏/污染icon.png"),TEXT("顶栏/启蒙icon.png")};
+        for(int32 I=0;I<UE_ARRAY_COUNT(Names);++I)
+            ProvidedTextures.Add(Names[I],ImportTexture(FPaths::ConvertRelativePathToFull(Directory/Files[I]),UIAssetRoot+TEXT("Art/Provided/")+Names[I]));
+        Require(CoverTextures.Num()==16,TEXT("All sixteen supplied book covers have mappings"));
+    }
+    void ImportCharacters()
+    {
+        const FString Directory=FPaths::ProjectDir()/TEXT("SourceArt/UI/Characters/Original/角色与猫头鹰立绘");
+        const TCHAR* Names[]={TEXT("T_HeroMale"),TEXT("T_HeroFemale"),TEXT("T_Normal01"),TEXT("T_Normal02"),TEXT("T_Normal03"),TEXT("T_Normal04"),TEXT("T_Hurry"),TEXT("T_Secret"),TEXT("T_Polluted01"),TEXT("T_Polluted02")};
+        const TCHAR* Files[]={TEXT("主角立绘/主角男装形象.PNG"),TEXT("主角立绘/主角女装形象.PNG"),TEXT("普通客人/IMG_6128.PNG"),TEXT("普通客人/IMG_6130.PNG"),TEXT("普通客人/IMG_6132.PNG"),TEXT("普通客人/IMG_6133.PNG"),TEXT("赶时间的人.PNG"),TEXT("戴帽兜的神秘人.PNG"),TEXT("被污染的客人/IMG_6125.PNG"),TEXT("被污染的客人/IMG_6127.PNG")};
+        for(int32 I=0;I<UE_ARRAY_COUNT(Names);++I)
+            CharacterTextures.Add(Names[I],ImportTexture(FPaths::ConvertRelativePathToFull(Directory/Files[I]),UIAssetRoot+TEXT("Art/Characters/")+Names[I],false,true));
+        CharacterTextures.Add(TEXT("T_Merchant"),ImportTexture(FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()/TEXT("SourceArt/UI/Characters/Merchant/merchant_cutout.png")),UIAssetRoot+TEXT("Art/Characters/T_Merchant"),false,true));
+        // The archive's owl is deliberately not imported; keep the current tutorial/owl asset.
+    }
+    FSlateBrush CharacterBrush(FName TextureName)
+    {
+        FSlateBrush Brush; UTexture2D* Texture=CharacterTextures.FindRef(TextureName);
+        Require(Texture!=nullptr,TEXT("Character texture: ")+TextureName.ToString()); if(!Texture)return Brush;
+        Brush.SetResourceObject(Texture); Brush.DrawAs=ESlateBrushDrawType::Image;
+        const int32 Width=Texture->Source.GetSizeX(),Height=Texture->Source.GetSizeY();
+        TArray64<uint8> Pixels;
+        if(!Texture->Source.GetMipData(Pixels,0) || Texture->Source.GetFormat()!=TSF_BGRA8 || Pixels.Num()!=static_cast<int64>(Width)*Height*4)
+        { Require(false,TEXT("Expected RGBA character source: ")+TextureName.ToString()); return Brush; }
+        int32 Left=Width,Top=Height,Right=0,Bottom=0;
+        for(int32 Y=0;Y<Height;++Y)for(int32 X=0;X<Width;++X)if(Pixels[(static_cast<int64>(Y)*Width+X)*4+3]>0)
+        { Left=FMath::Min(Left,X); Top=FMath::Min(Top,Y); Right=FMath::Max(Right,X+1); Bottom=FMath::Max(Bottom,Y+1); }
+        Require(Right>Left && Bottom>Top,TEXT("Character source has visible pixels"));
+        // Trim only transparent margins in the brush UV; original PNG bytes stay untouched.
+        Brush.SetUVRegion(FBox2f(FVector2f(static_cast<float>(Left)/Width,static_cast<float>(Top)/Height),FVector2f(static_cast<float>(Right)/Width,static_cast<float>(Bottom)/Height)));
+        Brush.ImageSize=FVector2D(Right-Left,Bottom-Top); return Brush;
+    }
+    UScaleBox* CharacterFrame(UWidgetBlueprint* BP,FName FrameName,FName ImageName,FName TextureName)
+    {
+        UScaleBox* Frame=W<UScaleBox>(BP,FrameName); Frame->SetStretch(EStretch::ScaleToFit); Frame->SetVisibility(ESlateVisibility::HitTestInvisible);
+        UImage* Portrait=W<UImage>(BP,ImageName); Portrait->SetBrush(CharacterBrush(TextureName)); Portrait->SetVisibility(ESlateVisibility::HitTestInvisible);
+        UScaleBoxSlot* Slot=CastChecked<UScaleBoxSlot>(Frame->AddChild(Portrait)); Slot->SetHorizontalAlignment(HAlign_Center); Slot->SetVerticalAlignment(VAlign_Bottom);
+        return Frame;
+    }
+    UImage* Art(UWidgetBlueprint* BP,UCanvasPanel* Canvas,FName Name,FName TextureName,float X,float Y,float Width,float Height,int32 Z=3)
+    {
+        UTexture2D* Texture=ProvidedTextures.FindRef(TextureName); Require(Texture!=nullptr,TEXT("Provided art: ")+TextureName.ToString());
+        UImage* I=W<UImage>(BP,Name); I->SetBrushFromTexture(Texture); I->SetVisibility(ESlateVisibility::HitTestInvisible);
+        Place(Canvas,I,X,Y,Width,Height,Z); return I;
+    }
+    void Paper(UBorder* Border,FName TextureName)
+    {
+        UTexture2D* Texture=ProvidedTextures.FindRef(TextureName); Require(Texture!=nullptr,TEXT("Provided paper: ")+TextureName.ToString());
+        Border->SetBrushFromTexture(Texture); Border->SetBrushColor(FLinearColor::White);
+    }
+    void Image(UWidgetBlueprint* BP,UCanvasPanel* Canvas,const TCHAR* Path)
+    {
+        UTexture2D* Texture=LoadObject<UTexture2D>(nullptr,Path);
+        Require(Texture!=nullptr,FString(TEXT("Missing background texture: "))+Path);
+        UImage* I=W<UImage>(BP,TEXT("Background")); if(Texture) I->SetBrushFromTexture(Texture);
+        I->SetVisibility(ESlateVisibility::HitTestInvisible); Place(Canvas,I,0,0,1920,1080);
+    }
+    UCanvasPanel* Page(UWidgetBlueprint* BP,const TCHAR* Title,const TCHAR* Subtitle,const TCHAR* Texture=Front)
+    {
+        UCanvasPanel* C=W<UCanvasPanel>(BP,TEXT("Canvas_Page")); BP->WidgetTree->RootWidget=C;
+        Image(BP,C,Texture); Block(BP,C,TEXT("PageShade"),0,0,1920,1080,FLinearColor(0.02f,0.025f,0.04f,0.48f),1);
+        Block(BP,C,TEXT("HeadingPanel"),72,112,1776,108,Night,2);
+        Label(BP,C,TEXT("PageTitle"),Title,100,124,1700,52,36);
+        Label(BP,C,TEXT("PageSubtitle"),Subtitle,102,178,1700,38,19);
+        Label(BP,C,TEXT("Feedback"),TEXT(""),90,936,1740,55,21);
+        return C;
+    }
+    UK2Node_CallFunction* ContextCall(UEdGraph* G,UClass* Class,FName Function)
+    {
+        UK2Node_CallFunction* N=Call(G,Class,Function);
+        if(Pin(N,TEXT("WorldContextObject"))) Wire(Self(G),UEdGraphSchema_K2::PN_Self,N,TEXT("WorldContextObject"));
+        return N;
+    }
+    UK2Node_CallFunction* Service(UEdGraph* G) { return ContextCall(G,UShopBlueprintLibrary::StaticClass(),TEXT("GetShopService")); }
+    UK2Node_Message* Command(UEdGraph* G,FName Name)
+    {
+        UK2Node_Message* N=Message(G,Name); Wire(Service(G),UEdGraphSchema_K2::PN_ReturnValue,N,UEdGraphSchema_K2::PN_Self); return N;
+    }
+    void ShowFeedback(UWidgetBlueprint* BP,UEdGraphNode* Previous)
+    {
+        UEdGraph* G=EventGraph(BP);
+        UK2Node_CallFunction* Last=Call(G,UShopRunSubsystem::StaticClass(),TEXT("GetLastResult"));
+        Wire(Service(G),UEdGraphSchema_K2::PN_ReturnValue,Last,UEdGraphSchema_K2::PN_Self);
+        UK2Node_CallFunction* Format=Call(G,UShopPresentationLibrary::StaticClass(),TEXT("FormatCommandResult"));
+        Wire(Last,UEdGraphSchema_K2::PN_ReturnValue,Format,TEXT("Result"));
+        UK2Node_CallFunction* SetText=Call(G,UTextBlock::StaticClass(),TEXT("SetText"));
+        Wire(Get(G,TEXT("Feedback")),TEXT("Feedback"),SetText,UEdGraphSchema_K2::PN_Self);
+        Wire(Format,UEdGraphSchema_K2::PN_ReturnValue,SetText,TEXT("InText")); Next(Previous,SetText);
+    }
+    void Action(UWidgetBlueprint* BP,FName ButtonName,FName Method,bool Customer=false,FName BookVariable=NAME_None,int32 Candidate=INDEX_NONE)
+    {
+        UEdGraph* G=EventGraph(BP); auto* E=ButtonEvent(BP,ButtonName); auto* N=Command(G,Method); Next(E,N);
+        if(Customer) Wire(ContextCall(G,UShopPresentationLibrary::StaticClass(),TEXT("GetCurrentCustomerIndex")),UEdGraphSchema_K2::PN_ReturnValue,N,TEXT("CustomerIndex"));
+        if(!BookVariable.IsNone()) Wire(Get(G,BookVariable),BookVariable,N,TEXT("BookId"));
+        if(Candidate!=INDEX_NONE)
+        {
+            auto* Id=ContextCall(G,UShopPresentationLibrary::StaticClass(),TEXT("GetCandidateId")); Default(Id,TEXT("Index"),FString::FromInt(Candidate));
+            Wire(Id,UEdGraphSchema_K2::PN_ReturnValue,N,TEXT("DecreeId"));
+        }
+        ShowFeedback(BP,N);
+    }
+    UK2Node_CallFunction* TargetCall(UEdGraph* G,FName Widget,UClass* Class,FName Method)
+    {
+        auto* N=Call(G,Class,Method); Wire(Get(G,Widget),Widget,N,UEdGraphSchema_K2::PN_Self); return N;
+    }
+    UK2Node_CustomEvent* Custom(UWidgetBlueprint* BP,FName Name)
+    {
+        FGraphNodeCreator<UK2Node_CustomEvent> Maker(*EventGraph(BP)); auto* E=Maker.CreateNode(); E->CustomFunctionName=Name; Maker.Finalize(); return E;
+    }
+    void Quit(UWidgetBlueprint* BP,FName ButtonName)
+    {
+        auto* G=EventGraph(BP); auto* N=ContextCall(G,UKismetSystemLibrary::StaticClass(),TEXT("QuitGame")); Next(ButtonEvent(BP,ButtonName),N);
+    }
+    void FlowAction(UWidgetBlueprint* BP,FName ButtonName,FName Method)
+    {
+        UEdGraph* G=EventGraph(BP); FGraphNodeCreator<UK2Node_Message> Maker(*G); auto* N=Maker.CreateNode();
+        N->FunctionReference.SetExternalMember(Method,Flow->GeneratedClass); Maker.Finalize();
+        Wire(ContextCall(G,UShopPresentationLibrary::StaticClass(),TEXT("GetRootView")),UEdGraphSchema_K2::PN_ReturnValue,N,UEdGraphSchema_K2::PN_Self);
+        Next(ButtonEvent(BP,ButtonName),N);
+    }
+    void BuildFlow()
+    {
+        const FString Path=UIAssetRoot+TEXT("Framework/BPI_UIFlow"); UPackage* P=CreatePackage(*Path);
+        Flow=LoadObject<UBlueprint>(nullptr,*(Path+TEXT(".BPI_UIFlow")));
+        if(!Flow)
+        {
+            Flow=FKismetEditorUtilities::CreateBlueprint(UInterface::StaticClass(),P,TEXT("BPI_UIFlow"),BPTYPE_Interface,UBlueprint::StaticClass(),UBlueprintGeneratedClass::StaticClass());
+            for(FName Name:{FName(TEXT("ShowTutorial")),FName(TEXT("ShowMainMenu"))})
+            {
+                UEdGraph* G=FBlueprintEditorUtils::CreateNewGraph(Flow,Name,UEdGraph::StaticClass(),UEdGraphSchema_K2::StaticClass());
+                FBlueprintEditorUtils::AddFunctionGraph<UClass>(Flow,G,true,nullptr);
+            }
+        }
+        Finish(Flow);
+    }
+    UWidgetBlueprint* BookCard(const TCHAR* Name,FName Method,const TCHAR* ActionName,const TCHAR* Caption,bool Unlist=false)
+    {
+        UWidgetBlueprint* BP=Begin(Name); if(!BP)return nullptr;
+        FEdGraphPinType IdType; IdType.PinCategory=UEdGraphSchema_K2::PC_Name; AddVariable(BP,TEXT("BookId"),IdType,TEXT("book_novel"));
+        FEdGraphPinType TextureType; TextureType.PinCategory=UEdGraphSchema_K2::PC_Object; TextureType.PinSubCategoryObject=UTexture2D::StaticClass(); AddVariable(BP,TEXT("CoverTexture"),TextureType);
+        USizeBox* Size=W<USizeBox>(BP,TEXT("CardSize")); Size->SetWidthOverride(380); Size->SetHeightOverride(Unlist?630:570); BP->WidgetTree->RootWidget=Size;
+        UBorder* Paper=W<UBorder>(BP,TEXT("CardPaper")); Paper->SetBrushColor(Cream); Paper->SetPadding(FMargin(18,16)); Size->SetContent(Paper);
+        UCanvasPanel* Column=W<UCanvasPanel>(BP,TEXT("CardCanvas")); Paper->SetContent(Column);
+        USizeBox* CoverSize=W<USizeBox>(BP,TEXT("CoverSize")); CoverSize->SetWidthOverride(344); CoverSize->SetHeightOverride(190);
+        UScaleBox* CoverScale=W<UScaleBox>(BP,TEXT("CoverScale")); CoverScale->SetStretch(EStretch::ScaleToFit); CoverSize->SetContent(CoverScale);
+        UImage* Cover=W<UImage>(BP,TEXT("BookCover")); Cover->SetVisibility(ESlateVisibility::HitTestInvisible); CoverScale->SetContent(Cover);
+        Place(Column,CoverSize,0,0,344,190);
+        Bind(BP,TEXT("BookCover"),TEXT("Brush"),TEXT("MakeBookCoverBrush"),{},{{TEXT("Texture"),TEXT("CoverTexture")}});
+        UBorder* Spine=W<UBorder>(BP,TEXT("BookSpine")); Spine->SetBrushColor(Unlist?FLinearColor(0.22f,0.10f,0.30f,1):FLinearColor(0.18f,0.28f,0.29f,1)); Spine->SetPadding(FMargin(12,10));
+        UTextBlock* Title=Text(BP,TEXT("BookTitle"),TEXT("书名"),22,Cream); WrapText(Title,315); Spine->SetContent(Title);
+        Spine->SetClipping(EWidgetClipping::ClipToBounds); Place(Column,Spine,0,198,344,74);
+        UTextBlock* Description=Text(BP,TEXT("BookDescription"),TEXT("类别与价格"),17,Ink); WrapText(Description,338);
+        UScrollBox* DescriptionScroll=W<UScrollBox>(BP,TEXT("DescriptionScroll")); Place(Column,DescriptionScroll,0,280,344,96);
+        DescriptionScroll->AddChild(Description);
+        UTextBlock* Stock=Text(BP,TEXT("BookStock"),TEXT("库存"),18,Ink); WrapText(Stock,338);
+        Stock->SetClipping(EWidgetClipping::ClipToBounds); Place(Column,Stock,0,384,344,54);
+        // A fixed footer keeps the buttons aligned regardless of wrapped titles/descriptions.
+        // Description text scrolls in its own bounded region and cannot push the footer down.
+        UCanvasPanel* Footer=W<UCanvasPanel>(BP,TEXT("ActionArea")); Place(Column,Footer,0,446,344,Unlist?152:92);
+        Place(Footer,Button(BP,TEXT("BtnPrimary"),Caption),0,0,344,48);
+        if(Unlist) Place(Footer,Button(BP,TEXT("BtnUnlist"),TEXT("撤回一册")),0,56,344,48);
+        UTextBlock* Feedback=Text(BP,TEXT("Feedback"),TEXT(""),14,Ink); WrapText(Feedback,338);
+        Feedback->SetClipping(EWidgetClipping::ClipToBounds); Place(Footer,Feedback,0,Unlist?112:54,344,Unlist?40:38);
+        Bind(BP,TEXT("BookTitle"),TEXT("Text"),TEXT("GetBookTitle"),{},{{TEXT("BookId"),TEXT("BookId")}});
+        Bind(BP,TEXT("BookDescription"),TEXT("Text"),TEXT("GetBookDescription"),{},{{TEXT("BookId"),TEXT("BookId")}});
+        Bind(BP,TEXT("BookStock"),TEXT("Text"),TEXT("GetBookStockText"),{},{{TEXT("BookId"),TEXT("BookId")}});
+        Bind(BP,TEXT("BtnPrimary"),TEXT("IsEnabled"),TEXT("CanBookAction"),{{TEXT("Action"),ActionName}},{{TEXT("BookId"),TEXT("BookId")}});
+        if(Unlist) Bind(BP,TEXT("BtnUnlist"),TEXT("IsEnabled"),TEXT("CanBookAction"),{{TEXT("Action"),TEXT("Unlist")}},{{TEXT("BookId"),TEXT("BookId")}});
+        Require(Compile(BP),TEXT("Card skeleton")); Action(BP,TEXT("BtnPrimary"),Method,false,TEXT("BookId"));
+        if(Unlist) Action(BP,TEXT("BtnUnlist"),TEXT("RequestUnlistSecretBook"),false,TEXT("BookId"));
+        Finish(BP); return BP;
+    }
+    void Books(UWidgetBlueprint* BP,UCanvasPanel* C,UWidgetBlueprint* Card,const TArray<FName>& Ids)
+    {
+        UScrollBox* Scroll=W<UScrollBox>(BP,TEXT("BooksScroll")); Place(C,Scroll,104,246,1720,655,3);
+        UWrapBox* Wrap=W<UWrapBox>(BP,TEXT("BooksGrid")); Wrap->SetWrapSize(1680); Wrap->SetExplicitWrapSize(true); Scroll->AddChild(Wrap);
+        for(FName Id:Ids)
+        {
+            UUserWidget* Row=BP->WidgetTree->ConstructWidget<UUserWidget>(Card->GeneratedClass.Get(),FName(*(TEXT("Card_")+Id.ToString())));
+            if(auto* Property=FindFProperty<FNameProperty>(Row->GetClass(),TEXT("BookId"))) Property->SetPropertyValue_InContainer(Row,Id);
+            else Require(false,TEXT("BookId property not found"));
+            UTexture2D* Cover=CoverTextures.FindRef(Id); Require(Cover!=nullptr,TEXT("Mapped cover for ")+Id.ToString());
+            if(auto* Property=FindFProperty<FObjectPropertyBase>(Row->GetClass(),TEXT("CoverTexture"))) Property->SetObjectPropertyValue_InContainer(Row,Cover);
+            else Require(false,TEXT("CoverTexture property not found"));
+            Wrap->AddChildToWrapBox(Row)->SetPadding(FMargin(8,8));
+        }
+    }
+    void Figure(UWidgetBlueprint* BP,UCanvasPanel* C,bool Owl)
+    {
+        if(Owl)
+        {
+            Block(BP,C,TEXT("OwlBody"),315,365,210,245,FLinearColor(.28f,.20f,.14f,1),4);
+            Block(BP,C,TEXT("OwlLeftWing"),260,410,65,180,Gold,4); Block(BP,C,TEXT("OwlRightWing"),515,410,65,180,Gold,4);
+            Block(BP,C,TEXT("OwlEarLeft"),310,310,65,65,Gold,4); Block(BP,C,TEXT("OwlEarRight"),465,310,65,65,Gold,4);
+            Block(BP,C,TEXT("OwlEyeLeft"),335,390,68,65,Cream,5); Block(BP,C,TEXT("OwlEyeRight"),440,390,68,65,Cream,5);
+            Block(BP,C,TEXT("OwlPupilLeft"),364,415,20,28,Ink,6); Block(BP,C,TEXT("OwlPupilRight"),459,415,20,28,Ink,6);
+            Block(BP,C,TEXT("OwlBeak"),403,468,36,40,Gold,6);
+        }
+        else
+        {
+            Block(BP,C,TEXT("CustomerCoat"),290,435,300,290,FLinearColor(.12f,.22f,.26f,1),4);
+            Block(BP,C,TEXT("CustomerHead"),350,292,180,180,FLinearColor(.76f,.59f,.41f,1),5);
+            Block(BP,C,TEXT("CustomerHair"),338,268,204,64,Ink,6);
+            Block(BP,C,TEXT("CustomerEyeLeft"),383,362,20,15,Ink,6); Block(BP,C,TEXT("CustomerEyeRight"),475,362,20,15,Ink,6);
+            Block(BP,C,TEXT("CustomerBook"),490,560,130,170,Gold,6);
+        }
+    }
+    UWidgetBlueprint* MainMenu()
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_MainMenu")); if(!BP)return nullptr;
+        UCanvasPanel* C=Page(BP,TEXT("表  里  书  店"),TEXT("开门迎客，或把秘密藏进书架。"),Exterior);
+        Block(BP,C,TEXT("MenuPanel"),1090,300,690,570,Night,3);
+        Label(BP,C,TEXT("MenuStory"),TEXT("一家书店，两种秩序。\n\n白天，为来客寻找合适的书。\n夜晚，在进货与秘密之间做出选择。\n\n售出秘密书能够获利，污染也会随之增长。"),1140,340,580,310,27);
+        Place(C,Button(BP,TEXT("BtnStart"),TEXT("开始游戏")),1150,690,560,70,4);
+        Place(C,Button(BP,TEXT("BtnQuit"),TEXT("退出游戏")),1150,785,560,60,4);
+        Require(Compile(BP),TEXT("Menu skeleton")); FlowAction(BP,TEXT("BtnStart"),TEXT("ShowTutorial")); Quit(BP,TEXT("BtnQuit")); Finish(BP); return BP;
+    }
+    UWidgetBlueprint* Tutorial()
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_OwlTutorial")); if(!BP)return nullptr;
+        FEdGraphPinType Int; Int.PinCategory=UEdGraphSchema_K2::PC_Int; AddVariable(BP,TEXT("DialogueIndex"),Int,TEXT("0"));
+        UCanvasPanel* C=Page(BP,TEXT("猫头鹰 · 开店之前"),TEXT("点击对话框逐句阅读。引导结束前，顾客不会开始等待。"));
+        UTexture2D* Owl=LoadObject<UTexture2D>(nullptr,OwlPath); Require(Owl!=nullptr,TEXT("Owl portrait asset"));
+        UImage* Portrait=W<UImage>(BP,TEXT("OwlPortrait")); if(Owl)Portrait->SetBrushFromTexture(Owl);
+        Portrait->SetVisibility(ESlateVisibility::HitTestInvisible); Place(C,Portrait,265,225,380,570,3);
+        UBorder* Dialogue=Block(BP,C,TEXT("DialoguePaper"),72,746,1776,261,FLinearColor::White,4); Paper(Dialogue,TEXT("T_Dialogue"));
+        UTextBlock* Speaker=Label(BP,C,TEXT("Speaker"),TEXT("守店的猫头鹰"),142,757,255,50,27); CastChecked<UCanvasPanelSlot>(Speaker->Slot)->SetZOrder(5);
+        UTextBlock* DialogueText=Label(BP,C,TEXT("DialogueText"),TEXT(""),134,845,1530,125,27,Ink); CastChecked<UCanvasPanelSlot>(DialogueText->Slot)->SetZOrder(5);
+        Bind(BP,TEXT("DialogueText"),TEXT("Text"),TEXT("GetTutorialText"),{},{{TEXT("Index"),TEXT("DialogueIndex")}});
+        Place(C,HitArea(BP,TEXT("BtnDialogueHit")),72,746,1620,261,6);
+        Place(C,HitArea(BP,TEXT("BtnNext")),1695,875,130,110,6);
+        Art(BP,C,TEXT("NextArrow"),TEXT("T_DialogueNext"),1730,937,66,38,5);
+        UTextBlock* Hint=Label(BP,C,TEXT("NextHint"),TEXT("点击继续"),1688,877,140,36,19,Ink); CastChecked<UCanvasPanelSlot>(Hint->Slot)->SetZOrder(5);
+        CastChecked<UCanvasPanelSlot>(BP->WidgetTree->FindWidget(TEXT("Feedback"))->Slot)->SetPosition(FVector2D(90,1018));
+        Require(Compile(BP),TEXT("Tutorial skeleton")); UEdGraph* G=EventGraph(BP);
+        auto* Reset=Custom(BP,TEXT("ResetGuide")); auto* SetIndex=Set(G,TEXT("DialogueIndex")); Default(SetIndex,TEXT("DialogueIndex"),TEXT("0")); Next(Reset,SetIndex);
+        auto* Less=Call(G,UKismetMathLibrary::StaticClass(),TEXT("Less_IntInt")); Wire(Get(G,TEXT("DialogueIndex")),TEXT("DialogueIndex"),Less,TEXT("A")); Default(Less,TEXT("B"),TEXT("9"));
+        FGraphNodeCreator<UK2Node_IfThenElse> BranchMaker(*G); auto* Branch=BranchMaker.CreateNode(); BranchMaker.Finalize();
+        Next(ButtonEvent(BP,TEXT("BtnNext")),Branch); Next(ButtonEvent(BP,TEXT("BtnDialogueHit")),Branch); Wire(Less,UEdGraphSchema_K2::PN_ReturnValue,Branch,UEdGraphSchema_K2::PN_Condition);
+        auto* Add=Call(G,UKismetMathLibrary::StaticClass(),TEXT("Add_IntInt")); Wire(Get(G,TEXT("DialogueIndex")),TEXT("DialogueIndex"),Add,TEXT("A")); Default(Add,TEXT("B"),TEXT("1"));
+        auto* AdvanceIndex=Set(G,TEXT("DialogueIndex")); Wire(Add,UEdGraphSchema_K2::PN_ReturnValue,AdvanceIndex,TEXT("DialogueIndex")); Wire(Branch,UEdGraphSchema_K2::PN_Then,AdvanceIndex,UEdGraphSchema_K2::PN_Execute);
+        auto* Start=Command(G,TEXT("RequestNewRun")); Wire(Branch,UEdGraphSchema_K2::PN_Else,Start,UEdGraphSchema_K2::PN_Execute); ShowFeedback(BP,Start);
+        Finish(BP); return BP;
+    }
+    UWidgetBlueprint* Store()
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_SurfaceShop")); if(!BP)return nullptr;
+        FEdGraphPinType Bool; Bool.PinCategory=UEdGraphSchema_K2::PC_Boolean; AddVariable(BP,TEXT("bCustomerSelected"),Bool,TEXT("false"));
+        // The supplied scene already contains the counter. Keep the idle scene unobstructed;
+        // the root owns the top HUD, and interaction UI appears only after a portrait click.
+        UCanvasPanel* C=W<UCanvasPanel>(BP,TEXT("Canvas_Page")); BP->WidgetTree->RootWidget=C;
+        Block(BP,C,TEXT("SceneMatte"),0,0,1920,1080,FLinearColor(.035f,.04f,.052f,1));
+        // Crop the existing full-resolution scene in UMG, without altering the source artwork.
+        // The reference shows the ground floor (source x=240..1680, y=405..1080).
+        UScaleBox* Frame=W<UScaleBox>(BP,TEXT("FirstFloorFrame")); Frame->SetStretch(EStretch::ScaleToFit); Place(C,Frame,0,130,1920,900,1);
+        USizeBox* FloorSize=W<USizeBox>(BP,TEXT("FirstFloorSize")); FloorSize->SetWidthOverride(1440); FloorSize->SetHeightOverride(675); Frame->SetContent(FloorSize);
+        UCanvasPanel* Scene=W<UCanvasPanel>(BP,TEXT("FirstFloorScene")); Scene->SetClipping(EWidgetClipping::ClipToBounds); FloorSize->SetContent(Scene);
+        Image(BP,Scene,Front); CastChecked<UCanvasPanelSlot>(BP->WidgetTree->FindWidget(TEXT("Background"))->Slot)->SetPosition(FVector2D(-240,-405));
+        UCanvasPanel* Keeper=W<UCanvasPanel>(BP,TEXT("ShopkeeperGroup")); Place(Scene,Keeper,905,200,160,225,3);
+        Keeper->SetVisibility(ESlateVisibility::SelfHitTestInvisible); Keeper->SetClipping(EWidgetClipping::ClipToBounds);
+        Place(Keeper,CharacterFrame(BP,TEXT("ShopkeeperFrame"),TEXT("ShopkeeperPortrait"),TEXT("T_HeroMale")),0,0,160,225,7);
+        UCanvasPanel* Customer=W<UCanvasPanel>(BP,TEXT("CustomerGroup")); Place(Scene,Customer,661,283,320,300,4);
+        Customer->SetVisibility(ESlateVisibility::Collapsed); Bind(BP,TEXT("CustomerGroup"),TEXT("Visibility"),TEXT("GetCustomerVisibility"));
+        UWidgetSwitcher* Portraits=W<UWidgetSwitcher>(BP,TEXT("CustomerPortraits")); Place(Customer,Portraits,0,0,320,300,5);
+        const TCHAR* PortraitNames[]={TEXT("T_Normal01"),TEXT("T_Normal02"),TEXT("T_Normal03"),TEXT("T_Normal04"),TEXT("T_Hurry"),TEXT("T_Secret"),TEXT("T_Polluted01"),TEXT("T_Polluted02")};
+        for(int32 I=0;I<UE_ARRAY_COUNT(PortraitNames);++I)
+            Portraits->AddChild(CharacterFrame(BP,FName(*FString::Printf(TEXT("CustomerPortraitFrame%d"),I)),FName(*FString::Printf(TEXT("CustomerPortrait%d"),I)),PortraitNames[I]));
+        Portraits->SetActiveWidgetIndex(INDEX_NONE);
+        Place(Customer,HitArea(BP,TEXT("BtnPortraitHit")),0,0,320,300,7);
+        Label(BP,C,TEXT("Feedback"),TEXT(""),800,220,1000,36,21);
+        UCanvasPanel* Interaction=W<UCanvasPanel>(BP,TEXT("InteractionPanel")); Place(C,Interaction,1370,283,440,432,5); Interaction->SetVisibility(ESlateVisibility::Collapsed);
+        Bind(BP,TEXT("InteractionPanel"),TEXT("Visibility"),TEXT("GetInteractionVisibility"),{},{{TEXT("bCustomerSelected"),TEXT("bCustomerSelected")}});
+        Block(BP,Interaction,TEXT("InteractionPaper"),0,0,440,432,Night,0);
+        Label(BP,Interaction,TEXT("InteractionHeading"),TEXT("接待这位顾客"),22,20,396,44,27);
+        Place(Interaction,Button(BP,TEXT("BtnShelf"),TEXT("打开书架 · 选择图书")),22,82,396,64,4);
+        Place(Interaction,Button(BP,TEXT("BtnObserve"),TEXT("观察顾客")),22,169,396,64,4);
+        Place(Interaction,Button(BP,TEXT("BtnReject"),TEXT("谢绝这位顾客")),22,256,396,64,4);
+        Label(BP,Interaction,TEXT("Patience"),TEXT(""),22,348,396,48,22); Bind(BP,TEXT("Patience"),TEXT("Text"),TEXT("GetCustomerPatienceText"));
+        UBorder* Bubble=Block(BP,C,TEXT("NeedPanel"),72,746,1776,261,FLinearColor::White,4); Paper(Bubble,TEXT("T_Dialogue"));
+        UCanvasPanel* Speech=W<UCanvasPanel>(BP,TEXT("SpeechContent")); Bubble->SetPadding(FMargin(0)); Bubble->SetContent(Speech);
+        Label(BP,Speech,TEXT("CustomerName"),TEXT("顾客"),72,12,255,50,27); Bind(BP,TEXT("CustomerName"),TEXT("Text"),TEXT("GetCustomerName"));
+        Label(BP,Speech,TEXT("NeedText"),TEXT(""),64,99,1610,124,28,Ink); Bubble->SetVisibility(ESlateVisibility::Collapsed);
+        Bind(BP,TEXT("NeedText"),TEXT("Text"),TEXT("GetCustomerNeedText"));
+        Bind(BP,TEXT("NeedPanel"),TEXT("Visibility"),TEXT("GetInteractionVisibility"),{},{{TEXT("bCustomerSelected"),TEXT("bCustomerSelected")}});
+        Require(Compile(BP),TEXT("Shop skeleton")); auto* G=EventGraph(BP);
+        auto* RefreshPortrait=Custom(BP,TEXT("RefreshPortrait")); auto* ChoosePortrait=ContextCall(G,UShopPresentationLibrary::StaticClass(),TEXT("GetCustomerPortraitSlot"));
+        auto* SetPortrait=TargetCall(G,TEXT("CustomerPortraits"),UWidgetSwitcher::StaticClass(),TEXT("SetActiveWidgetIndex")); Wire(ChoosePortrait,UEdGraphSchema_K2::PN_ReturnValue,SetPortrait,TEXT("Index")); Next(RefreshPortrait,SetPortrait);
+        auto* Present=Call(G,UShopRunSubsystem::StaticClass(),TEXT("IsCurrentCustomerPresent")); Wire(Service(G),UEdGraphSchema_K2::PN_ReturnValue,Present,UEdGraphSchema_K2::PN_Self);
+        FGraphNodeCreator<UK2Node_IfThenElse> SelectMaker(*G); auto* SelectBranch=SelectMaker.CreateNode(); SelectMaker.Finalize();
+        Next(ButtonEvent(BP,TEXT("BtnPortraitHit")),SelectBranch); Wire(Present,UEdGraphSchema_K2::PN_ReturnValue,SelectBranch,UEdGraphSchema_K2::PN_Condition);
+        auto* Select=Set(G,TEXT("bCustomerSelected")); Default(Select,TEXT("bCustomerSelected"),TEXT("true")); Wire(SelectBranch,UEdGraphSchema_K2::PN_Then,Select,UEdGraphSchema_K2::PN_Execute);
+        auto* Reset=Custom(BP,TEXT("ResetCustomer")); auto* ClearSelection=Set(G,TEXT("bCustomerSelected")); Default(ClearSelection,TEXT("bCustomerSelected"),TEXT("false")); Next(Reset,ClearSelection);
+        auto* ClearFeedback=TargetCall(G,TEXT("Feedback"),UTextBlock::StaticClass(),TEXT("SetText")); Next(ClearSelection,ClearFeedback);
+        Action(BP,TEXT("BtnShelf"),TEXT("RequestBeginSell"),true); Action(BP,TEXT("BtnReject"),TEXT("RequestRejectCustomer"),true);
+        Action(BP,TEXT("BtnObserve"),TEXT("RequestObserveCustomer"),true);
+        Finish(BP); return BP;
+    }
+    UWidgetBlueprint* InventoryPage(const TCHAR* Name,const TCHAR* Title,const TCHAR* Subtitle,UWidgetBlueprint* Card,const TArray<FName>& Ids,const TCHAR* ExitCaption,FName ExitCommand,const TCHAR* Background=Front)
+    {
+        UWidgetBlueprint* BP=Begin(Name); if(!BP)return nullptr; const FString ScrollHint=FString(Subtitle)+TEXT("  向下滚动查看更多。"); UCanvasPanel* C=Page(BP,Title,*ScrollHint,Background); Books(BP,C,Card,Ids);
+        Place(C,Button(BP,TEXT("BtnDone"),ExitCaption),1380,992,450,66,4);
+        Require(Compile(BP),TEXT("Inventory page skeleton")); Action(BP,TEXT("BtnDone"),ExitCommand); Finish(BP); return BP;
+    }
+    UWidgetBlueprint* MerchantPage(UWidgetBlueprint* Card)
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_Merchant")); if(!BP)return nullptr;
+        UCanvasPanel* C=W<UCanvasPanel>(BP,TEXT("Canvas_Page")); BP->WidgetTree->RootWidget=C; Image(BP,C,Merchant);
+        UCanvasPanel* Person=W<UCanvasPanel>(BP,TEXT("MerchantGroup")); Place(C,Person,960,456,320,515,2);
+        Person->SetVisibility(ESlateVisibility::SelfHitTestInvisible);
+        Place(Person,CharacterFrame(BP,TEXT("MerchantFrame"),TEXT("MerchantPortrait"),TEXT("T_Merchant")),0,0,320,515,5);
+        Place(Person,HitArea(BP,TEXT("BtnMerchantHit")),0,0,320,515,6);
+        UCanvasPanel* Purchase=W<UCanvasPanel>(BP,TEXT("PurchasePanel")); Place(C,Purchase,0,0,1920,1080,5);
+        Purchase->SetVisibility(ESlateVisibility::Collapsed);
+        Block(BP,Purchase,TEXT("PurchaseShade"),0,105,1920,880,FLinearColor(.02f,.025f,.04f,.8f));
+        Block(BP,Purchase,TEXT("PurchaseHeading"),72,112,1776,108,Night,1);
+        Label(BP,Purchase,TEXT("PageTitle"),TEXT("夜间商人 · 采购普通书"),100,124,1480,52,36);
+        Label(BP,Purchase,TEXT("PageSubtitle"),TEXT("每次购买一册并直接加入书架。向下滚动查看更多。"),102,178,1480,38,19);
+        Books(BP,Purchase,Card,OrdinaryIds);
+        Place(Purchase,Button(BP,TEXT("BtnClosePurchase"),TEXT("返回集市")),1640,138,180,58,4);
+        Label(BP,Purchase,TEXT("Feedback"),TEXT(""),90,936,1200,55,21);
+        Place(C,Button(BP,TEXT("BtnDone"),TEXT("结束夜晚 · 返回书店")),1380,992,450,66,9);
+        Require(Compile(BP),TEXT("Merchant scene skeleton")); UEdGraph* G=EventGraph(BP);
+        auto* Open=TargetCall(G,TEXT("PurchasePanel"),UWidget::StaticClass(),TEXT("SetVisibility")); Default(Open,TEXT("InVisibility"),TEXT("SelfHitTestInvisible")); Next(ButtonEvent(BP,TEXT("BtnMerchantHit")),Open);
+        auto* Close=TargetCall(G,TEXT("PurchasePanel"),UWidget::StaticClass(),TEXT("SetVisibility")); Default(Close,TEXT("InVisibility"),TEXT("Collapsed")); Next(ButtonEvent(BP,TEXT("BtnClosePurchase")),Close);
+        auto* Reset=Custom(BP,TEXT("ResetMerchant")); auto* ResetPanel=TargetCall(G,TEXT("PurchasePanel"),UWidget::StaticClass(),TEXT("SetVisibility")); Default(ResetPanel,TEXT("InVisibility"),TEXT("Collapsed")); Next(Reset,ResetPanel);
+        auto* ResetFeedback=TargetCall(G,TEXT("Feedback"),UTextBlock::StaticClass(),TEXT("SetText")); Next(ResetPanel,ResetFeedback);
+        Action(BP,TEXT("BtnDone"),TEXT("RequestEndNight")); Finish(BP); return BP;
+    }
+    UWidgetBlueprint* NightChoice()
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_NightChoice")); if(!BP)return nullptr;
+        UCanvasPanel* C=Page(BP,TEXT("夜幕降临 · 今晚只能选择一项"),TEXT("夜间不接待顾客。完成活动后休息，第二天重新营业。"),Exterior);
+        Block(BP,C,TEXT("MerchantPanel"),180,310,720,530,Night,3); Block(BP,C,TEXT("InsidePanel"),1020,310,720,530,Night,3);
+        Label(BP,C,TEXT("MerchantTitle"),TEXT("拜访商人"),230,360,620,70,38);
+        Label(BP,C,TEXT("MerchantDetail"),TEXT("使用资金补充普通书籍。\n\n购买后直接加入表店书架，\n第二天可立即出售。"),230,460,620,235,27);
+        Label(BP,C,TEXT("InsideTitle"),TEXT("进入里书店"),1070,360,620,70,38);
+        Label(BP,C,TEXT("InsideDetail"),TEXT("将秘密书放上表店书架。\n\n秘密顾客会在有货时登门，\n高额收入也将带来污染。"),1070,460,620,235,27);
+        Place(C,Button(BP,TEXT("BtnMerchant"),TEXT("选择进货")),230,715,620,75,4);
+        Place(C,Button(BP,TEXT("BtnInside"),TEXT("选择里书店")),1070,715,620,75,4);
+        Require(Compile(BP),TEXT("Night choice skeleton")); Action(BP,TEXT("BtnMerchant"),TEXT("RequestOpenRestock")); Action(BP,TEXT("BtnInside"),TEXT("RequestOpenInside")); Finish(BP); return BP;
+    }
+    UWidgetBlueprint* Settlement(bool NightEnd)
+    {
+        UWidgetBlueprint* BP=Begin(NightEnd?TEXT("WBP_NightSettlement"):TEXT("WBP_DaySettlement")); if(!BP)return nullptr;
+        UCanvasPanel* C=Page(BP,NightEnd?TEXT("夜间结算 · 休息完成"):TEXT("营业结束 · 今日账本"),NightEnd?TEXT("灵能和有限秘密书补给已结算；上架状态保留到下一天。"):TEXT("三位顾客已经处理完毕，今日租金已结算。"),Exterior);
+        Block(BP,C,TEXT("Ledger"),420,300,1080,550,Night,3);
+        int32 Y=340; for(const TCHAR* Field:{TEXT("Day"),TEXT("Money"),TEXT("Income"),TEXT("Expense"),TEXT("Psychic"),TEXT("Pollution")})
+        { FName Name(*FString::Printf(TEXT("Ledger_%s"),Field)); Label(BP,C,Name,TEXT(""),475,Y,970,55,29); Bind(BP,Name,TEXT("Text"),TEXT("GetStatText"),{{TEXT("Field"),Field}}); Y+=64; }
+        Place(C,Button(BP,TEXT("BtnContinue"),NightEnd?TEXT("迎接新的一天"):TEXT("继续 · 选择今晚的活动")),475,765,970,65,4);
+        Require(Compile(BP),TEXT("Settlement skeleton")); Action(BP,TEXT("BtnContinue"),TEXT("RequestContinue")); Finish(BP); return BP;
+    }
+    UWidgetBlueprint* Decrees()
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_Decree")); if(!BP)return nullptr;
+        UCanvasPanel* C=Page(BP,TEXT("律令 · 镇定正在蔓延的污染"),TEXT("顾客等待已暂停。选择一条能够支付代价的律令，或暂时跳过。"),Inner);
+        for(int32 I=0;I<4;++I)
+        {
+            const float X=110+I*430; Block(BP,C,FName(*FString::Printf(TEXT("DecreePaper%d"),I)),X,265,406,590,Night,3);
+            FName Title(*FString::Printf(TEXT("DecreeTitle%d"),I)),Body(*FString::Printf(TEXT("DecreeBody%d"),I)),Cost(*FString::Printf(TEXT("DecreeCost%d"),I)),Btn(*FString::Printf(TEXT("BtnDecree%d"),I));
+            Label(BP,C,Title,TEXT(""),X+22,295,360,85,31); Label(BP,C,Body,TEXT(""),X+22,395,360,235,20); Label(BP,C,Cost,TEXT(""),X+22,640,360,106,20);
+            Place(C,Button(BP,Btn,TEXT("颁布这条律令")),X+22,765,360,64,4);
+            const TMap<FName,FString> Arg={{TEXT("Index"),FString::FromInt(I)}};
+            Bind(BP,Title,TEXT("Text"),TEXT("GetDecreeTitle"),Arg); Bind(BP,Body,TEXT("Text"),TEXT("GetDecreeText"),Arg); Bind(BP,Cost,TEXT("Text"),TEXT("GetDecreeCostText"),Arg); Bind(BP,Btn,TEXT("IsEnabled"),TEXT("CanChooseDecree"),Arg);
+        }
+        Place(C,Button(BP,TEXT("BtnSkip"),TEXT("暂不颁布 · 继续")),1320,990,490,65,4);
+        Require(Compile(BP),TEXT("Decree skeleton")); for(int32 I=0;I<4;++I) Action(BP,FName(*FString::Printf(TEXT("BtnDecree%d"),I)),TEXT("RequestEnactDecree"),false,NAME_None,I);
+        Action(BP,TEXT("BtnSkip"),TEXT("RequestSkipDecree")); Finish(BP); return BP;
+    }
+    UWidgetBlueprint* Ending()
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_Ending")); if(!BP)return nullptr;
+        UCanvasPanel* C=Page(BP,TEXT("故事的终点"),TEXT("每一笔交易，都在改变书店与它的主人。"),Exterior);
+        Block(BP,C,TEXT("EndingPaper"),300,275,1320,650,Night,3);
+        Block(BP,C,TEXT("EndingAccent"),300,275,1320,16,Gold,4); Bind(BP,TEXT("EndingAccent"),TEXT("BrushColor"),TEXT("GetEndingAccent"));
+        Label(BP,C,TEXT("EndingTitle"),TEXT(""),370,317,1190,80,44); Label(BP,C,TEXT("EndingStory"),TEXT(""),370,412,1190,205,27);
+        Bind(BP,TEXT("EndingTitle"),TEXT("Text"),TEXT("GetEndingTitle")); Bind(BP,TEXT("EndingStory"),TEXT("Text"),TEXT("GetEndingText"));
+        Label(BP,C,TEXT("EndingCondition"),TEXT(""),370,635,1190,132,24); Bind(BP,TEXT("EndingCondition"),TEXT("Text"),TEXT("GetEndingConditionText"));
+        Place(C,Button(BP,TEXT("BtnRestart"),TEXT("再开一家书店")),380,805,530,72,4); Place(C,Button(BP,TEXT("BtnMenu"),TEXT("返回主菜单")),950,805,530,72,4);
+        Require(Compile(BP),TEXT("Ending skeleton")); Action(BP,TEXT("BtnRestart"),TEXT("RequestNewRun")); FlowAction(BP,TEXT("BtnMenu"),TEXT("ShowMainMenu")); Finish(BP); return BP;
+    }
+    UWidgetBlueprint* Root(const TArray<UWidgetBlueprint*>& Pages)
+    {
+        UWidgetBlueprint* BP=Begin(TEXT("WBP_UIRoot")); if(!BP)return nullptr;
+        Require(FBlueprintEditorUtils::ImplementNewInterface(BP,FTopLevelAssetPath(UShopView::StaticClass())),TEXT("ShopView interface"));
+        Require(FBlueprintEditorUtils::ImplementNewInterface(BP,FTopLevelAssetPath(Flow->GeneratedClass)),TEXT("UIFlow interface"));
+        UScaleBox* Scale=W<UScaleBox>(BP,TEXT("ViewportScale")); Scale->SetStretch(EStretch::ScaleToFit); BP->WidgetTree->RootWidget=Scale;
+        USizeBox* Size=W<USizeBox>(BP,TEXT("DesignResolution")); Size->SetWidthOverride(1920); Size->SetHeightOverride(1080); Scale->SetContent(Size);
+        UCanvasPanel* C=W<UCanvasPanel>(BP,TEXT("Canvas_Root")); Size->SetContent(C);
+        UWidgetSwitcher* Switcher=W<UWidgetSwitcher>(BP,TEXT("Pages")); Place(C,Switcher,0,0,1920,1080);
+        const TCHAR* Names[]={TEXT("MenuPage"),TEXT("TutorialPage"),TEXT("ShopPage"),TEXT("ShelfPage"),TEXT("DayEndPage"),TEXT("NightChoicePage"),TEXT("MerchantPage"),TEXT("InsidePage"),TEXT("DecreePage"),TEXT("NightEndPage"),TEXT("EndingPage")};
+        for(int32 I=0;I<Pages.Num();++I)
+        { UUserWidget* Child=BP->WidgetTree->ConstructWidget<UUserWidget>(Pages[I]->GeneratedClass.Get(),Names[I]); Child->bIsVariable=true; Switcher->AddChild(Child); }
+        Switcher->SetActiveWidgetIndex(0);
+        UBorder* HUD=Block(BP,C,TEXT("HUD"),72,22,1776,74,Night,8); HUD->SetVisibility(ESlateVisibility::Collapsed);
+        HUD->SetPadding(FMargin(0)); UCanvasPanel* HUDItems=W<UCanvasPanel>(BP,TEXT("HUDItems")); HUD->SetContent(HUDItems);
+        Art(BP,HUDItems,TEXT("HUD_MoneyArt"),TEXT("T_HUDMoney"),240,9,241,55,0);
+        Art(BP,HUDItems,TEXT("HUD_StockArt"),TEXT("T_HUDStock"),499,9,207,55,0);
+        Art(BP,HUDItems,TEXT("HUD_PsychicArt"),TEXT("T_HUDPsychic"),726,3,219,69,0);
+        Art(BP,HUDItems,TEXT("HUD_PollutionArt"),TEXT("T_HUDPollutionIcon"),975,15,40,44,0);
+        Art(BP,HUDItems,TEXT("HUD_EnlightenArt"),TEXT("T_HUDEnlightenIcon"),1198,15,44,45,0);
+        const TCHAR* Fields[]={TEXT("Day"),TEXT("Money"),TEXT("Stock"),TEXT("Psychic"),TEXT("Pollution"),TEXT("Enlighten"),TEXT("Queue")};
+        const float Positions[]={20,306,560,824,1030,1255,1472}, Widths[]={210,165,140,117,155,180,280};
+        for(int32 I=0;I<UE_ARRAY_COUNT(Fields);++I)
+        { FName N(*FString::Printf(TEXT("HUD_%s"),Fields[I])); Label(BP,HUDItems,N,TEXT(""),Positions[I],21,Widths[I],45,I==3?20:22); Bind(BP,N,TEXT("Text"),TEXT("GetHudStatText"),{{TEXT("Field"),Fields[I]}}); }
+        Label(BP,C,TEXT("Toast"),TEXT(""),90,1016,1180,52,21);
+        Require(Compile(BP),TEXT("Root skeleton")); UEdGraph* G=EventGraph(BP);
+        auto* Refresh=Event(BP,UShopView::StaticClass(),TEXT("RefreshShop")); auto* SetPage=TargetCall(G,TEXT("Pages"),UWidgetSwitcher::StaticClass(),TEXT("SetActiveWidgetIndex"));
+        auto* PageIndex=ContextCall(G,UShopPresentationLibrary::StaticClass(),TEXT("GetPhasePageIndex")); Wire(PageIndex,UEdGraphSchema_K2::PN_ReturnValue,SetPage,TEXT("Index"));
+        // RefreshShop also runs after purchases and during customer ticks. Reset only on entry,
+        // while the switcher still holds the previous page index, not on every refresh.
+        auto* OldPage=TargetCall(G,TEXT("Pages"),UWidgetSwitcher::StaticClass(),TEXT("GetActiveWidgetIndex"));
+        auto* WasNotMerchant=Call(G,UKismetMathLibrary::StaticClass(),TEXT("NotEqual_IntInt")); Wire(OldPage,UEdGraphSchema_K2::PN_ReturnValue,WasNotMerchant,TEXT("A")); Default(WasNotMerchant,TEXT("B"),TEXT("6"));
+        auto* IsMerchant=Call(G,UKismetMathLibrary::StaticClass(),TEXT("EqualEqual_IntInt")); Wire(PageIndex,UEdGraphSchema_K2::PN_ReturnValue,IsMerchant,TEXT("A")); Default(IsMerchant,TEXT("B"),TEXT("6"));
+        auto* EnteringMerchant=Call(G,UKismetMathLibrary::StaticClass(),TEXT("BooleanAND")); Wire(WasNotMerchant,UEdGraphSchema_K2::PN_ReturnValue,EnteringMerchant,TEXT("A")); Wire(IsMerchant,UEdGraphSchema_K2::PN_ReturnValue,EnteringMerchant,TEXT("B"));
+        FGraphNodeCreator<UK2Node_IfThenElse> EntryMaker(*G); auto* EntryBranch=EntryMaker.CreateNode(); EntryMaker.Finalize(); Next(Refresh,EntryBranch); Wire(EnteringMerchant,UEdGraphSchema_K2::PN_ReturnValue,EntryBranch,UEdGraphSchema_K2::PN_Condition);
+        auto* ResetMerchant=TargetCall(G,TEXT("MerchantPage"),Pages[6]->GeneratedClass,TEXT("ResetMerchant")); Next(EntryBranch,ResetMerchant);
+        auto* ClearMerchantToast=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Next(ResetMerchant,ClearMerchantToast); Next(ClearMerchantToast,SetPage);
+        Wire(EntryBranch,UEdGraphSchema_K2::PN_Else,SetPage,UEdGraphSchema_K2::PN_Execute);
+        auto* IsBoot=Call(G,UKismetMathLibrary::StaticClass(),TEXT("EqualEqual_IntInt")); Wire(PageIndex,UEdGraphSchema_K2::PN_ReturnValue,IsBoot,TEXT("A")); Default(IsBoot,TEXT("B"),TEXT("0"));
+        auto* RefreshPortrait=TargetCall(G,TEXT("ShopPage"),Pages[2]->GeneratedClass,TEXT("RefreshPortrait")); Next(SetPage,RefreshPortrait);
+        FGraphNodeCreator<UK2Node_IfThenElse> Maker(*G); auto* Branch=Maker.CreateNode(); Maker.Finalize(); Next(RefreshPortrait,Branch); Wire(IsBoot,UEdGraphSchema_K2::PN_ReturnValue,Branch,UEdGraphSchema_K2::PN_Condition);
+        auto* Hide=TargetCall(G,TEXT("HUD"),UWidget::StaticClass(),TEXT("SetVisibility")); Default(Hide,TEXT("InVisibility"),TEXT("Collapsed")); Wire(Branch,UEdGraphSchema_K2::PN_Then,Hide,UEdGraphSchema_K2::PN_Execute);
+        auto* Show=TargetCall(G,TEXT("HUD"),UWidget::StaticClass(),TEXT("SetVisibility")); Default(Show,TEXT("InVisibility"),TEXT("SelfHitTestInvisible")); Wire(Branch,UEdGraphSchema_K2::PN_Else,Show,UEdGraphSchema_K2::PN_Execute);
+        for(FName EventName:{FName(TEXT("NewDay")),FName(TEXT("ResolveCustomer"))})
+        {
+            auto* E=Event(BP,UShopView::StaticClass(),EventName); auto* Reset=TargetCall(G,TEXT("ShopPage"),Pages[2]->GeneratedClass,TEXT("ResetCustomer")); Next(E,Reset);
+            if(EventName==TEXT("ResolveCustomer"))
+            {
+                auto* Format=Call(G,UShopPresentationLibrary::StaticClass(),TEXT("FormatCustomerResult")); Wire(E,TEXT("Result"),Format,TEXT("Result"));
+                auto* Toast=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Wire(Format,UEdGraphSchema_K2::PN_ReturnValue,Toast,TEXT("InText")); Next(Reset,Toast);
+            }
+            else { auto* Clear=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Next(Reset,Clear); }
+        }
+        auto* DecreeResult=Event(BP,UShopView::StaticClass(),TEXT("ShowDecreeResult"));
+        auto* DecreeText=Call(G,UShopPresentationLibrary::StaticClass(),TEXT("FormatCommandResult")); Wire(DecreeResult,TEXT("Result"),DecreeText,TEXT("Result"));
+        auto* DecreeToast=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Wire(DecreeText,UEdGraphSchema_K2::PN_ReturnValue,DecreeToast,TEXT("InText")); Next(DecreeResult,DecreeToast);
+        auto* ObserveResult=Event(BP,UShopView::StaticClass(),TEXT("ShowObserveResult"));
+        auto* ObserveText=Call(G,UShopPresentationLibrary::StaticClass(),TEXT("FormatObservation")); Wire(ObserveResult,TEXT("Customer"),ObserveText,TEXT("Customer"));
+        auto* ObserveToast=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Wire(ObserveText,UEdGraphSchema_K2::PN_ReturnValue,ObserveToast,TEXT("InText")); Next(ObserveResult,ObserveToast);
+        auto* EndEvent=Event(BP,UShopView::StaticClass(),TEXT("ShowEnding"));
+        auto* ClearEndToast=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Next(EndEvent,ClearEndToast);
+        auto* Intro=Event(BP,Flow->GeneratedClass,TEXT("ShowTutorial")); auto* ResetIntro=TargetCall(G,TEXT("TutorialPage"),Pages[1]->GeneratedClass,TEXT("ResetGuide")); Next(Intro,ResetIntro);
+        auto* IntroPage=TargetCall(G,TEXT("Pages"),UWidgetSwitcher::StaticClass(),TEXT("SetActiveWidgetIndex")); Default(IntroPage,TEXT("Index"),TEXT("1")); Next(ResetIntro,IntroPage);
+        auto* ClearIntro=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Next(IntroPage,ClearIntro);
+        auto* MenuEvent=Event(BP,Flow->GeneratedClass,TEXT("ShowMainMenu")); auto* MenuPage=TargetCall(G,TEXT("Pages"),UWidgetSwitcher::StaticClass(),TEXT("SetActiveWidgetIndex")); Default(MenuPage,TEXT("Index"),TEXT("0")); Next(MenuEvent,MenuPage);
+        auto* HideHUD=TargetCall(G,TEXT("HUD"),UWidget::StaticClass(),TEXT("SetVisibility")); Default(HideHUD,TEXT("InVisibility"),TEXT("Collapsed")); Next(MenuPage,HideHUD);
+        auto* ClearMenu=TargetCall(G,TEXT("Toast"),UTextBlock::StaticClass(),TEXT("SetText")); Next(HideHUD,ClearMenu);
+        Finish(BP); return BP;
+    }
+    UBlueprint* Framework(const TCHAR* Name,UClass* Parent)
+    {
+        FString Path=UIAssetRoot+TEXT("Framework/")+Name; UBlueprint* BP=LoadObject<UBlueprint>(nullptr,*(Path+TEXT(".")+Name));
+        if(!BP)BP=FKismetEditorUtilities::CreateBlueprint(Parent,CreatePackage(*Path),Name,BPTYPE_Normal,UBlueprint::StaticClass(),UBlueprintGeneratedClass::StaticClass());
+        Require(Compile(BP),TEXT("Framework compile")); return BP;
+    }
+    void Entry(UWidgetBlueprint* RootBP)
+    {
+        UBlueprint* PC=Framework(TEXT("BP_UIPlayerController"),AShopPlayerController::StaticClass());
+        CastChecked<AShopPlayerController>(PC->GeneratedClass->GetDefaultObject())->RootWidgetClass=RootBP->GeneratedClass; Require(Save(PC),TEXT("Save UI PC"));
+        UBlueprint* GM=Framework(TEXT("BP_UIGameMode"),AShopGameMode::StaticClass());
+        AShopGameMode* CDO=CastChecked<AShopGameMode>(GM->GeneratedClass->GetDefaultObject()); CDO->PlayerControllerClass=PC->GeneratedClass; CDO->bStartNewRunOnFirstEntry=false; Require(Save(GM),TEXT("Save UI GM"));
+        const FString MapPath=UIAssetRoot+TEXT("Maps/L_BookstoreUI"); UWorld* World=LoadObject<UWorld>(nullptr,*(MapPath+TEXT(".L_BookstoreUI")));
+        if(!World)
+        { UWorldFactory* Factory=NewObject<UWorldFactory>(); World=Cast<UWorld>(Factory->FactoryCreateNew(UWorld::StaticClass(),CreatePackage(*MapPath),TEXT("L_BookstoreUI"),RF_Public|RF_Standalone,nullptr,GWarn)); }
+        Require(World!=nullptr,TEXT("Create UI map")); if(World) {World->GetWorldSettings()->DefaultGameMode=GM->GeneratedClass; Require(Save(World),TEXT("Save UI map"));}
+    }
+    void ExportArt()
+    {
+        const TCHAR* Paths[]={Exterior,Front,Inner,TEXT("/Game/美术/场景/F0F1B1E923EDE78AD2C8F93A3AC70F92.F0F1B1E923EDE78AD2C8F93A3AC70F92")};
+        FString Out=FPaths::ProjectSavedDir()/TEXT("UIBuild/Art"); IFileManager::Get().MakeDirectory(*Out,true);
+        UClass* ExporterClass=FindObject<UClass>(nullptr,TEXT("/Script/UnrealEd.TextureExporterPNG"));
+        if(!ExporterClass)return;
+        for(int32 I=0;I<4;++I) if(UTexture2D* T=LoadObject<UTexture2D>(nullptr,Paths[I])) UExporter::ExportToFile(T,NewObject<UExporter>(GetTransientPackage(),ExporterClass),*(Out/FString::Printf(TEXT("scene_%d.png"),I)),false,false,false);
+    }
+}
+
+UShopUIBuildCommandlet::UShopUIBuildCommandlet()
+{
+    IsClient=false; IsServer=false; IsEditor=true; LogToConsole=true;
+}
+
+int32 UShopUIBuildCommandlet::Main(const FString& Params)
+{
+    FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("UMGEditor"));
+    Rebuild=FParse::Param(*Params,TEXT("Rebuild"));
+    const bool UpgradeCounterFlow=FParse::Param(*Params,TEXT("UpgradeCounterFlow"));
+    const bool UpgradeSceneLayout=FParse::Param(*Params,TEXT("UpgradeSceneLayout"));
+    const bool UpgradeCharacterPortraits=FParse::Param(*Params,TEXT("UpgradeCharacterPortraits"));
+    // A data-only migration: do not regenerate designer assets or import art.
+    if(FParse::Param(*Params,TEXT("UpgradeUniquePortraits"))) return ShopUIData::Build(false,true)?0:1;
+    if(FParse::Param(*Params,TEXT("UpgradeMerchantPortrait")))
+    {
+        // Update the Designer brush in place; retain the user's graph, layout and all other pages.
+        UWidgetBlueprint* MerchantBP=LoadObject<UWidgetBlueprint>(nullptr,TEXT("/Game/ProgramA/UI/WBP_Merchant.WBP_Merchant"));
+        UImage* Portrait=MerchantBP && MerchantBP->WidgetTree ? Cast<UImage>(MerchantBP->WidgetTree->FindWidget(TEXT("MerchantPortrait"))) : nullptr;
+        if(!Portrait) {Require(false,TEXT("Existing MerchantPortrait is required for the in-place upgrade"));return 1;}
+        CharacterTextures.Add(TEXT("T_Merchant"),ImportTexture(FPaths::ConvertRelativePathToFull(FPaths::ProjectDir()/TEXT("SourceArt/UI/Characters/Merchant/merchant_cutout.png")),UIAssetRoot+TEXT("Art/Characters/T_Merchant"),false,true));
+        if(!Good)return 1;
+        Portrait->Modify(); Portrait->SetBrush(CharacterBrush(TEXT("T_Merchant")));
+        if(!Good)return 1;
+        Finish(MerchantBP);
+        UE_LOG(LogShopUIBuild,Display,TEXT("Updated only the merchant portrait brush to the dedicated supplied merchant cutout; graph/layout unchanged."));
+        return Good?0:1;
+    }
+    if(FParse::Param(*Params,TEXT("ExportArt"))) {ExportArt(); return 0;}
+    ImportOwl(); ImportProvidedArt(); ImportCharacters(); if(!Good)return 1;
+    if(!ShopUIData::Build(UpgradeCounterFlow))return 1;
+    if(UpgradeCharacterPortraits)
+    {
+        Rebuild=true; Flow=LoadObject<UBlueprint>(nullptr,TEXT("/Game/ProgramA/UI/Framework/BPI_UIFlow.BPI_UIFlow"));
+        UDataTable* BookTable=LoadObject<UDataTable>(nullptr,TEXT("/Game/ProgramA/Release/Data/DT_Books.DT_Books"));
+        UWidgetBlueprint* BuyCard=LoadObject<UWidgetBlueprint>(nullptr,TEXT("/Game/ProgramA/UI/Components/WBP_MerchantBookCard.WBP_MerchantBookCard"));
+        if(!Flow || !BookTable || !BuyCard)return 1;
+        for(FName Id:BookTable->GetRowNames()) if(const FBookData* Row=BookTable->FindRow<FBookData>(Id,TEXT("CharacterPortraits"))) if(Row->BookType!=EBookType::Secret)OrdinaryIds.Add(Id);
+        OrdinaryIds.Sort(FNameLexicalLess()); Store(); MerchantPage(BuyCard); if(!Good)return 1;
+        TArray<UWidgetBlueprint*> ExistingPages;
+        for(const TCHAR* Name:{TEXT("WBP_MainMenu"),TEXT("WBP_OwlTutorial"),TEXT("WBP_SurfaceShop"),TEXT("WBP_Bookshelf"),TEXT("WBP_DaySettlement"),TEXT("WBP_NightChoice"),TEXT("WBP_Merchant"),TEXT("WBP_InsideShop"),TEXT("WBP_Decree"),TEXT("WBP_NightSettlement"),TEXT("WBP_Ending")})
+        {
+            UWidgetBlueprint* PageAsset=LoadObject<UWidgetBlueprint>(nullptr,*(UIAssetRoot+Name+TEXT(".")+Name));
+            if(!PageAsset) {Require(false,TEXT("Missing existing UI page: ")+FString(Name));return 1;} ExistingPages.Add(PageAsset);
+        }
+        UWidgetBlueprint* RootBP=Root(ExistingPages); if(!Good)return 1; Entry(RootBP);
+        UE_LOG(LogShopUIBuild,Display,TEXT("Replaced geometric figures with supplied character PNGs; male hero, eight customer portraits and dedicated merchant. Tutorial/owl and business tables preserved."));
+        return Good?0:1;
+    }
+    if(UpgradeSceneLayout)
+    {
+        // Layout-only update: keep all saved business rules and the unrelated page assets.
+        Rebuild=true; Flow=LoadObject<UBlueprint>(nullptr,TEXT("/Game/ProgramA/UI/Framework/BPI_UIFlow.BPI_UIFlow"));
+        UDataTable* BookTable=LoadObject<UDataTable>(nullptr,TEXT("/Game/ProgramA/Release/Data/DT_Books.DT_Books"));
+        if(!Flow || !BookTable)return 1;
+        for(FName Id:BookTable->GetRowNames()) if(const FBookData* Row=BookTable->FindRow<FBookData>(Id,TEXT("SceneLayout"))) (Row->BookType==EBookType::Secret?SecretIds:OrdinaryIds).Add(Id);
+        OrdinaryIds.Sort(FNameLexicalLess()); SecretIds.Sort(FNameLexicalLess());
+        UWidgetBlueprint* SaleCard=BookCard(TEXT("Components/WBP_SaleBookCard"),TEXT("RequestSell"),TEXT("Sell"),TEXT("出售这一册"));
+        UWidgetBlueprint* BuyCard=BookCard(TEXT("Components/WBP_MerchantBookCard"),TEXT("RequestRestock"),TEXT("Buy"),TEXT("购买一册"));
+        UWidgetBlueprint* SecretCard=BookCard(TEXT("Components/WBP_SecretBookCard"),TEXT("RequestListSecretBook"),TEXT("List"),TEXT("上架到表店"),true);
+        if(!Good)return 1;
+        TArray<FName> All=OrdinaryIds; All.Append(SecretIds);
+        Store();
+        InventoryPage(TEXT("WBP_Bookshelf"),TEXT("表店书架 · 请选择顾客需要的书"),TEXT("普通书直接出售；秘密书只能出售已经上架的册数。选错书也会结束这次接待。"),SaleCard,All,TEXT("取消选书"),TEXT("RequestCancelSell"));
+        MerchantPage(BuyCard);
+        InventoryPage(TEXT("WBP_InsideShop"),TEXT("里书店 · 管理秘密书"),TEXT("上架与撤回不收费、不加污染。夜结恢复灵能并补入有限秘密书；新补给需下次进入里店上架。"),SecretCard,SecretIds,TEXT("完成上架 · 结束夜晚"),TEXT("RequestEndNight"),Inner);
+        if(!Good)return 1;
+        TArray<UWidgetBlueprint*> ExistingPages;
+        for(const TCHAR* Name:{TEXT("WBP_MainMenu"),TEXT("WBP_OwlTutorial"),TEXT("WBP_SurfaceShop"),TEXT("WBP_Bookshelf"),TEXT("WBP_DaySettlement"),TEXT("WBP_NightChoice"),TEXT("WBP_Merchant"),TEXT("WBP_InsideShop"),TEXT("WBP_Decree"),TEXT("WBP_NightSettlement"),TEXT("WBP_Ending")})
+        {
+            UWidgetBlueprint* PageAsset=LoadObject<UWidgetBlueprint>(nullptr,*(UIAssetRoot+Name+TEXT(".")+Name));
+            if(!PageAsset) {Require(false,TEXT("Missing existing UI page: ")+FString(Name));return 1;} ExistingPages.Add(PageAsset);
+        }
+        UWidgetBlueprint* RootBP=Root(ExistingPages); if(!Good)return 1; Entry(RootBP);
+        UE_LOG(LogShopUIBuild,Display,TEXT("Updated ground-floor framing, fixed book-card footers, merchant scene entry and dependent pages. Saved business rules preserved."));
+        return Good?0:1;
+    }
+    if(UpgradeCounterFlow)
+    {
+        // Narrow authoring update: preserve inventory/card/menu/tutorial layouts and their graphs.
+        Rebuild=true;
+        Flow=LoadObject<UBlueprint>(nullptr,TEXT("/Game/ProgramA/UI/Framework/BPI_UIFlow.BPI_UIFlow"));
+        if(!Flow || !Store() || !Ending() || !Good)return 1;
+        TArray<UWidgetBlueprint*> ExistingPages;
+        for(const TCHAR* Name:{TEXT("WBP_MainMenu"),TEXT("WBP_OwlTutorial"),TEXT("WBP_SurfaceShop"),TEXT("WBP_Bookshelf"),TEXT("WBP_DaySettlement"),TEXT("WBP_NightChoice"),TEXT("WBP_Merchant"),TEXT("WBP_InsideShop"),TEXT("WBP_Decree"),TEXT("WBP_NightSettlement"),TEXT("WBP_Ending")})
+        {
+            UWidgetBlueprint* PageAsset=LoadObject<UWidgetBlueprint>(nullptr,*(UIAssetRoot+Name+TEXT(".")+Name));
+            if(!PageAsset) {Require(false,TEXT("Missing existing UI page: ")+FString(Name));return 1;}
+            ExistingPages.Add(PageAsset);
+        }
+        UWidgetBlueprint* RootBP=Root(ExistingPages); if(!Good)return 1; Entry(RootBP);
+        UE_LOG(LogShopUIBuild,Display,TEXT("Updated counter arrivals, selection-only interactions, four ending presentation and 35-day UI rules. Other page layouts preserved."));
+        return Good?0:1;
+    }
+    UDataTable* Books=LoadObject<UDataTable>(nullptr,TEXT("/Game/ProgramA/Release/Data/DT_Books.DT_Books"));
+    if(!Books)return 1;
+    for(FName Id:Books->GetRowNames()) if(const FBookData* Row=Books->FindRow<FBookData>(Id,TEXT("UIBuild"))) (Row->BookType==EBookType::Secret?SecretIds:OrdinaryIds).Add(Id);
+    OrdinaryIds.Sort(FNameLexicalLess()); SecretIds.Sort(FNameLexicalLess());
+    BuildFlow(); if(!Good)return 1;
+    UWidgetBlueprint* SaleCard=BookCard(TEXT("Components/WBP_SaleBookCard"),TEXT("RequestSell"),TEXT("Sell"),TEXT("出售这一册"));
+    UWidgetBlueprint* BuyCard=BookCard(TEXT("Components/WBP_MerchantBookCard"),TEXT("RequestRestock"),TEXT("Buy"),TEXT("购买一册"));
+    UWidgetBlueprint* SecretCard=BookCard(TEXT("Components/WBP_SecretBookCard"),TEXT("RequestListSecretBook"),TEXT("List"),TEXT("上架到表店"),true);
+    if(!Good)return 1;
+    TArray<FName> All=OrdinaryIds; All.Append(SecretIds);
+    TArray<UWidgetBlueprint*> Pages;
+    Pages.Add(MainMenu()); Pages.Add(Tutorial()); Pages.Add(Store());
+    Pages.Add(InventoryPage(TEXT("WBP_Bookshelf"),TEXT("表店书架 · 请选择顾客需要的书"),TEXT("普通书直接出售；秘密书只能出售已经上架的册数。选错书也会结束这次接待。"),SaleCard,All,TEXT("取消选书"),TEXT("RequestCancelSell")));
+    Pages.Add(Settlement(false)); Pages.Add(NightChoice());
+    Pages.Add(MerchantPage(BuyCard));
+    Pages.Add(InventoryPage(TEXT("WBP_InsideShop"),TEXT("里书店 · 管理秘密书"),TEXT("上架与撤回不收费、不加污染。夜结恢复灵能并补入有限秘密书；新补给需下次进入里店上架。"),SecretCard,SecretIds,TEXT("完成上架 · 结束夜晚"),TEXT("RequestEndNight"),Inner));
+    Pages.Add(Decrees()); Pages.Add(Settlement(true)); Pages.Add(Ending());
+    if(!Good||Pages.Contains(nullptr))return 1;
+    UWidgetBlueprint* RootBP=Root(Pages); if(!Good)return 1; Entry(RootBP);
+    if(!Good)return 1;
+    FString Manifest; for(UBlueprint* BP:Authored) Manifest+=BP->GetPathName()+LINE_TERMINATOR;
+    IFileManager::Get().MakeDirectory(*(FPaths::ProjectSavedDir()/TEXT("UIBuild")),true);
+    FFileHelper::SaveStringToFile(Manifest,*(FPaths::ProjectSavedDir()/TEXT("UIBuild/Assets.txt")),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+    UE_LOG(LogShopUIBuild,Display,TEXT("Created and compiled %d editable Widget Blueprints. Entry map: /Game/ProgramA/UI/Maps/L_BookstoreUI"),Authored.Num());
+    return 0;
+}

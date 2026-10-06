@@ -20,6 +20,8 @@ namespace ShopEconomy
     LIBARY_RELEASE_API bool SetSecretListing(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, bool bListed, FText& Error);
     LIBARY_RELEASE_API EShopActionResult Sell(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, const FCustomerRuntime& Customer, FText& Error);
     LIBARY_RELEASE_API bool HasMatchingStock(const FShopRunState& State, const FShopCatalog& Catalog, EBookType Type, EBookLayer Layer);
+    // The coordinator calls this once inside its guarded night-settlement transaction.
+    LIBARY_RELEASE_API bool ApplyNightlySupply(FShopRunState& State, const FShopCatalog& Catalog, FText& Error);
     LIBARY_RELEASE_API bool PayRent(FShopRunState& State, const FRunRules& Rules, FText& Error);
     LIBARY_RELEASE_API int32 TotalStock(const FShopRunState& State);
 }

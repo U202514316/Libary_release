@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "ShopRunSubsystem.h"
+#include "ShopSettings.h"
 #include "Engine/GameInstance.h"
 #include "Subsystems/SubsystemCollection.h"
 #include "UObject/StrongObjectPtr.h"
@@ -194,11 +195,20 @@ bool FReleaseSettingsInitialization::RunTest(const FString&)
     FSubsystemCollection<UGameInstanceSubsystem> Collection;
     Run->Initialize(Collection);
     FText Error;
-    const bool bConfigured = TestTrue(TEXT("Project settings load valid release data"), Run->ValidateConfig(Error));
+    const bool bConfigured = TestTrue(TEXT("Project settings load valid configured data"), Run->ValidateConfig(Error));
     if (!bConfigured) { AddError(Error.ToString()); Run->Deinitialize(); return false; }
+    // The game now selects UI-specific rules while the explicit Release fixtures
+    // above still verify the untouched zero-psychic Release configuration.
+    const UDataTable* ConfiguredRules = GetDefault<UShopSettings>()->RunRules.LoadSynchronous();
+    if (!TestNotNull(TEXT("Configured run-rules asset is available"), ConfiguredRules)) { Run->Deinitialize(); return false; }
+    if (!TestEqual(TEXT("Configured run rules have one row"), ConfiguredRules->GetRowMap().Num(), 1)) { Run->Deinitialize(); return false; }
+    const FRunRules* ExpectedRules = ConfiguredRules->FindRow<FRunRules>(ConfiguredRules->GetRowNames()[0], TEXT("SettingsInitialization"), false);
+    if (!TestNotNull(TEXT("Configured run-rules row uses FRunRules"), ExpectedRules)) { Run->Deinitialize(); return false; }
+    AddInfo(FString::Printf(TEXT("Project rules: bDaytimeOnlyLoop=%s, StartPsychic=%d."),
+        ExpectedRules->bDaytimeOnlyLoop ? TEXT("true") : TEXT("false"), ExpectedRules->StartPsychic));
     TestEqual(TEXT("Default settings load sixteen real books"), Run->GetBookIds().Num(), 16);
     TestTrue(TEXT("Start directly from configured settings"), Run->RequestNewRun_Implementation());
-    TestEqual(TEXT("Release starts at zero psychic"), Run->GetSnapshot_Implementation().Psychic, 0);
+    TestEqual(TEXT("Initialization uses the selected rule's starting psychic"), Run->GetSnapshot_Implementation().Psychic, ExpectedRules->StartPsychic);
     TestEqual(TEXT("Release uses the full calendar"), Run->GetSnapshot_Implementation().MaxDays, 35);
     FBookData Book; int32 Stock = 0;
     TestTrue(TEXT("Progressive book is available"), Run->GetBookInfo_Implementation(TEXT("book_novel_03"), Book, Stock));

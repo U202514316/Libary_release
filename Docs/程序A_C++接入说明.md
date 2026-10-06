@@ -1,10 +1,30 @@
 # 程序 A：C++ 逻辑与蓝图接入说明
 
-> **界面接入修订：**C++ 已移除原生文字演示界面及自动入口，界面由用户在控件蓝图中制作。`Root Widget Class` 指向实现 `ShopView` 的用户根控件，或留空后由蓝图创建并调用 `AttachShopView`。本次 Editor/Game 构建成功，36 项经营自动化测试全部通过。最新目标是白天营业、夜间进货/里店上架二选一；白天秘密顾客、固定 3 人、开场引导和律令资源适配尚未完成。当前接口能力、接入方式与测试证据以 [README](../README.md) 为准。旧 Word 中的里店营业流程已过时，下文历史构建记录不代表本次验证结果。
+> **当前入口：**`/Game/ProgramA/UI`下已接通 15 个具有真实 Designer 与 EventGraph 的可编辑 WBP，以及“菜单／引导 → 白天固定 3 槽（每人等 2–4 秒，点击到场人物后操作）→ 夜间进货／里店上架二选一 → 夜结／次日 → 律令、结局与重开”的接口闭环。请以 [控件蓝图闭环使用说明](控件蓝图闭环使用说明.md) 为当前接入与调参主说明，运行地图为 `/Game/ProgramA/UI/Maps/L_BookstoreUI`。当前使用 UI 专用规则及律令表，夜间不营业；原 Release 表和旧夜间表店模式保留兼容。
 
-适用工程：`D:\unreal_project\Libary_release\Libary_Release.uproject`，引擎 UE 5.1，运行时模块 `Libary_Release`。本说明同步至 2026-10-06 本轮用户决定；构建、资产生成和回归的实际结果单列在文末。
+适用工程：`D:\unreal_project\Libary_release\Libary_Release.uproject`，引擎 UE 5.1，运行时模块 `Libary_Release`。**本次顾客去重／专属商人版本：Editor 编译、数据迁移和资产编译均成功；43 项经营自动化通过；最终界面回归 38,134 项检查、0 失败、0 错误、0 警告，92 张实际渲染。** 日志为 `Saved/Logs/UniquePortraits_Merchant_EditorBuild.log`、`UniquePortraits_DataBuild.log`、`UniquePortraits_Merchant_AssetBuild.log`、`UniquePortraits_Merchant_UIVerify.log`；经营报告在 `Saved/Automation/UniquePortraits_20261006/index.json`。35 天及四结局已回归；污染顾客与神秘人专项测试使用明确的临时生成配置。猫头鹰教程、猫头鹰纹理及 UI 律令表哈希未变，经营表仅开启立绘去重。旧 CharacterPortraits 的 34,240 项／85 图和此前验证仍属历史，共享 `Verification.txt`已更新。未进行人工 PIE 鼠标验收，未打包 exe。
 
-本轮已经写入经营、逐册秘密书、顾客、七条律令、结局判定以及 UI 接入用的 C++。Editor 和 Game 目标均完整构建成功；Release 八表已生成、独立进程校验通过并切换为项目配置；最终 29 项自动化测试全部成功。程序 B 已有 UI 资产，但其与这些新接口的连接和实际游玩仍待验收，不能据此宣称整套游戏可以直接玩。可下载 [Word 版完成情况与接口使用指南](程序A逻辑完成情况与接口使用指南.docx)，详细证据见文末。
+**当前表店场景与立绘：**一层场景裁剪方式不变：`FirstFloorFrame (0,130,1920,900)`内 SizeBox 为 `1440×675`，原 `1920×1080`背景在裁剪 Canvas 中放在 `(-240,-405)`，对应原图 `x240..1680/y405..1080`。`ShopkeeperGroup (905,200,160,225)`内 `ShopkeeperFrame → ShopkeeperPortrait`显示男装 `T_HeroMale`，旧 `ShopkeeperPlaceholder`几何已移除。`CustomerGroup`改为 `(661,283,320,300)`，横向中心保持；`CustomerPortraits`为 8 项 WidgetSwitcher，子项依次为 `CustomerPortraitFrame0..7 → CustomerPortrait0..7`，人物与场景等比缩放。透明 `BtnPortraitHit`及选中后才显示需求的逻辑保留。
+
+**人物映射与当日去重：**UI 经营表启用 `bUniqueDailyCustomerPortraits=true`，生成三人队伍时将互不重复的立绘保存在 `FCustomerRuntime.PortraitSlot`。普通槽 `0..3`、急躁 `4`、秘密 `5`、污染 `6..7`；每日急躁／秘密各最多 1 人、污染最多 2 人，其余由普通顾客补足。某种类的立绘耗尽后从其余合格种类按权重抽取。已服务者的立绘仍保留至当天结束，次日允许再次出现。Root.RefreshShop → ShopPage.RefreshPortrait → `GetCustomerPortraitSlot`只读取记录，不重新抽图；观察、售卖、拒绝均不换脸，伪装顾客换入等待槽时也避开已占用普通立绘。旧表默认关闭此选项，以兼容旧规则。
+
+**人物素材：**`SourceArt/UI/Characters/Original/角色与猫头鹰立绘/`保留完整 11 张 512×512 RGBA PNG。导入 10 张纹理至 `/Game/ProgramA/UI/Art/Characters/`，9 张实际使用：`T_HeroMale`、普通 `IMG_6128/6130/6132/6133 → T_Normal01..04`、赶时间的人 `T_Hurry`、帽兜神秘人 `T_Secret`、污染 `IMG_6125/6127 → T_Polluted01/02`；`T_HeroFemale`已导入但仅备用。原图像素不改，Brush 只用 UV 裁透明边距和 ImageSize 定显示尺寸，外层 ScaleBox 等比。包内猫头鹰不导入，现 `T_OwlGuide/WBP_OwlTutorial`保持不变。 原图映射及清单见 [character_manifest.json](../SourceArt/UI/Characters/character_manifest.json)。未来换立绘需同步适配 Brush UV／ImageSize：不同 PNG 的透明边距不同，仅替换 Texture 会沿用旧裁切，可能截断人物或造成额外留白。按新图有效区域更新显示参数，不需修改原图像素。
+
+**书卡布局：**三类 BookCard 使用 `CardCanvas`；正文 `DescriptionScroll`固定高 `96`，长文字可滚动。`ActionArea`固定 `y=446`，`BtnPrimary`高 `48`，里店 `BtnUnlist`位于动作区 `y=56`，使底部操作不受正文长度影响。上一版 FirstFloorMerchant 验证了 32 张实际嵌套卡的主按钮在整卡局部坐标中均为 `localY=462`（包含顶部内边距），长简介独立滚动。业务按钮的 `BookId`与原服务调用保持不变。
+
+**商人页面：**`MerchantGroup`内 `MerchantFrame → MerchantPortrait`已改用专属 `T_Merchant`。原始白底 JPEG 和内置 image_gen 生成的透明 PNG 保存在 `SourceArt/UI/Characters/Merchant/`，处理记录及完整提示词见 `imagegen_record.json`；此为 AI 辅助抠图，原始文件另行保留。增加该纹理后共 11 张角色纹理、10 张实际使用。透明 `BtnMerchantHit`打开 `PurchasePanel`，`BtnClosePurchase`回场景，`BtnDone`始终能结束夜晚。Root.RefreshShop 仅对 `old!=6 && new==6`调用 ResetMerchant，购买刷新不关闭面板、再次进入重置。仅原位替换 Brush，按钮图表与布局保留。
+
+**特殊顾客完成范围：**污染顾客达到污染 61 后可能进入表店，基础耐心 20 秒、购买普通书，可观察／拒绝／出售，使用 `T_Polluted01/02`；当前额外交易污染配置为 0，观察提示已改为实际行为描述。帽兜神秘人是 `Secret`，基础耐心 30 秒，只在有已上架秘密库存时可能生成；出售已上架秘密书按该书售价获得资金、基础污染 +10，使用 `T_Secret`。两类均已完成核心接待流程和立绘接入；秘密出售后的独立顾客转化剧情或回访系统不在当前实现中。
+
+**到场 API：**UI 表启用 `bUseCustomerArrivalDelay=true`及 `CustomerArrivalMin/Max=2/4`。首位及后继顾客均由业务计时到场；读取 `IsCurrentCustomerPresent()`和快照 `bCustomerPresent/CustomerArrivalRemaining`，不要按已经生成的队列直接显示顾客。等待期间 UI 查询 `GetCurrentCustomerIndex=-1`，到场帧保留完整耐心；后续仅当前顾客计时。`NewDay/ResolveCustomer`重置界面选择，人物到场本身不会展开面板。
+
+**本轮 CharacterPortraits 的 35 天与四结局证据：**本轮人物版本已重新通过，与此前 FirstFloorMerchant／CounterFlow 的种子及结果一致。真实 UI 保存数据经按钮流程完整经营 35 天，种子 731 普通策略为 Cycle（资金 863、启蒙 0、污染 0）；进步书策略种子 731 启蒙 58，正确保持 Cycle，种子 732 达到 Returned（资金 981、启蒙 74、污染 0）。原始数据拒绝顾客并支付房租可在第 7 天 Closed（资金 -75）。PollutionReleased 仍通过明确标记的临时增强售卖污染场景，经真实上架、到场和出售按钮达到污染 100；它不是原始污染数值下自然完整流程的验证。正式期限仍为 35 天，关门或污染极限可以提前结束，不生成第 36 天。结局页显示表中文案、触发条件、最终数值及色条，`ShowEnding`清空旧 Toast。等待／到场／选中、商人场景／采购、售书代表画面已经查看；采购图为 `merchant_purchase.png`，关闭图为 `merchant_closed.png`，均位于 `Saved/UIBuild/Preview/`。
+
+**尚未全部完成：**七条律令核心执行及弹窗已接入，但 TTL／剩余冷却界面、实际漏洞反噬播报尚缺。固定 3 客模式下无名律的客流惩罚不改变人数；闭架律阅读额外污染暂缺阅读入口。本次没有进一步调整律令参数。历史、黑市完整内容和 P2 存档仍在已声明的延期或未纳入范围。
+
+**当前人物迁移：**`-run=ShopUIBuild -UpgradeCharacterPortraits`只重建 SurfaceShop／Merchant／Root 及入口，不重建卡片／猫头鹰，不修改 DataTable；备份见 `Saved/Backups/BeforeCharacterPortraits_20261006`。旧 `-UpgradeSceneLayout/-UpgradeCounterFlow`及其备份保留作历史，不是换立绘需追加执行的步骤。用户手工编辑后切勿直接重跑这些参数或 `-Rebuild`覆盖成果，日常在 Designer／EventGraph 中修改并 Compile、Save。
+
+**下文主体保留早期 C++ 接口说明和历史验证记录，发生差异时以上述页首及主说明为准。** 其中“手工创建全部界面”“项目全部引用 Release 表”“29／36／38 项测试”“首次自动开局”及旧夜间经营阶段，不能当作当前 UI 配置：当前入口已配置根 WBP，关闭首次自动开局，待引导结束调用 `RequestNewRun`；`RunRules/Decrees`引用 UI 专用表，其他六表继续使用 Release。旧 [Word 版接口指南](程序A逻辑完成情况与接口使用指南.docx)可供接口背景查阅，当前按钮和阶段流程优先依照主说明。
 
 ## 1. 哪些已写成 C++，哪些自动生成，哪些要在 UE 中连接
 

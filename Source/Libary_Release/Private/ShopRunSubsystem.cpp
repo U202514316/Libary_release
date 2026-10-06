@@ -164,6 +164,7 @@ FRunSnapshot UShopRunSubsystem::GetSnapshot_Implementation() const
     Out.TotalStock = ShopEconomy::TotalStock(State); Out.TodayIncome = State.TodayIncome; Out.TodayExpense = State.TodayExpense;
     Out.TotalSold = State.TotalSold; Out.Rent = Catalog.Rules.Rent + State.RentPenalty; Out.Turn = State.Turn; Out.NegativeDays = State.NegativeDays;
     Out.PsychicMax = Catalog.Rules.PsychicMax;
+    Out.bCustomerPresent = IsCurrentCustomerPresent(); Out.CustomerArrivalRemaining = State.CustomerArrivalRemaining;
     Out.Phase = State.Phase; Out.NightChoice = State.NightChoice; Out.Ending = State.Ending;
     Out.ActiveDecrees = State.Decrees; Out.Clues = State.Clues; Out.DecreeCandidates = State.DecreeCandidates;
     Out.PendingEventId = State.PendingEventId; Out.EndMessage = EndingText(State.Ending);
@@ -215,6 +216,12 @@ bool UShopRunSubsystem::GetEventInfo(FName Id, FEventData& Event) const
     Event = FEventData(); if (const FEventData* Found = Catalog.Events.Find(Id)) { Event = *Found; return true; } return false;
 }
 int32 UShopRunSubsystem::GetActiveCustomerIndex() const { return State.ActiveCustomer; }
+bool UShopRunSubsystem::IsCurrentCustomerPresent() const
+{
+    const EGamePhase EffectivePhase = ModalPhase(State.Phase) ? State.ResumePhase : State.Phase;
+    return State.bCustomerPresent && (TradingPhase(EffectivePhase) || SellingPhase(EffectivePhase)) &&
+        ShopCustomers::Current(State) != INDEX_NONE;
+}
 FText UShopRunSubsystem::BuildCustomerNeedText(int32 CustomerIndex) const
 {
     return State.Customers.IsValidIndex(CustomerIndex) ? ShopCustomers::BuildNeedText(State.Customers[CustomerIndex], Catalog) : FText();
@@ -227,6 +234,7 @@ EShopActionResult UShopRunSubsystem::RequestBeginSell_Implementation(int32 Custo
     if (!TradingPhase(State.Phase)) return Reject(EShopActionResult::InvalidPhase, TEXT("当前阶段不能开始售卖。" )).Code;
     if (ShopCustomers::Current(State) != CustomerIndex || !State.Customers.IsValidIndex(CustomerIndex))
         return Reject(EShopActionResult::InvalidId, TEXT("只能接待当前队首的顾客。" )).Code;
+    if (!IsCurrentCustomerPresent()) return Reject(EShopActionResult::Unavailable, TEXT("顾客尚未到场，请稍候。" )).Code;
     FShopRunState Next = State;
     const FCustomerRuntime& Customer = Next.Customers[CustomerIndex];
     if (Customer.bFake) return Reject(EShopActionResult::Unavailable, TEXT("这位顾客不回应交易。可以观察或拒绝，避免污染继续增加。" )).Code;
@@ -249,6 +257,7 @@ void UShopRunSubsystem::CompleteCustomer(FShopRunState& Next, int32 Index, EShop
     Next.ActiveCustomer = INDEX_NONE;
     if (Next.Phase == EGamePhase::Sell) Next.Phase = EGamePhase::Day;
     else if (Next.Phase == EGamePhase::NightSell) Next.Phase = EGamePhase::NightShop;
+    ShopCustomers::ResetArrival(Next, Catalog.Rules);
 }
 
 EShopActionResult UShopRunSubsystem::RequestSell_Implementation(FName BookId)
@@ -282,6 +291,7 @@ FShopCommandResult UShopRunSubsystem::RequestObserveCustomer_Implementation(int3
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
     if ((!TradingPhase(State.Phase) && !SellingPhase(State.Phase)) || ShopCustomers::Current(State) != CustomerIndex || !State.Customers.IsValidIndex(CustomerIndex))
         return Reject(EShopActionResult::InvalidPhase, TEXT("只能观察当前营业中的队首顾客。"));
+    if (!IsCurrentCustomerPresent()) return Reject(EShopActionResult::Unavailable, TEXT("顾客尚未到场，暂时不能观察。"));
     FShopRunState Next = State;
     Next.Customers[CustomerIndex].bObserved = true;
     Commit(MoveTemp(Next));
@@ -296,6 +306,7 @@ FShopCommandResult UShopRunSubsystem::RequestRejectCustomer_Implementation(int32
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
     if ((!TradingPhase(State.Phase) && !SellingPhase(State.Phase)) || ShopCustomers::Current(State) != CustomerIndex || !State.Customers.IsValidIndex(CustomerIndex))
         return Reject(EShopActionResult::InvalidPhase, TEXT("当前顾客不可拒绝。"));
+    if (!IsCurrentCustomerPresent()) return Reject(EShopActionResult::Unavailable, TEXT("顾客尚未到场，暂时不能拒绝。"));
     FShopRunState Next = State;
     CompleteCustomer(Next, CustomerIndex, EShopActionResult::Rejected);
     Commit(MoveTemp(Next), EShopActionResult::Success, NAME_None, CustomerIndex);
@@ -367,6 +378,8 @@ FShopCommandResult UShopRunSubsystem::RequestOpenInside_Implementation()
 FShopCommandResult UShopRunSubsystem::RequestOpenTableShop_Implementation()
 {
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (Catalog.Rules.bDaytimeOnlyLoop)
+        return Reject(EShopActionResult::InvalidPhase, TEXT("当前规则夜间只进货或管理里店，请结束夜晚后开始次日营业。"));
     if ((State.Phase != EGamePhase::Inside || State.NightChoice != ENightChoice::Inside) &&
         (State.Phase != EGamePhase::Restock || State.NightChoice != ENightChoice::Restock))
         return Reject(EShopActionResult::InvalidPhase, TEXT("请先完成夜间选择，再返回表书店营业。"));
@@ -550,6 +563,7 @@ bool UShopRunSubsystem::SettleNight(FShopRunState& Next, FText& Error)
     if (!FMath::IsFinite(Decay) || Decay < 0.0 || Decay > MAX_int32) { Error = FText::FromString(TEXT("污染衰减配置溢出。")); return false; }
     if (Next.SkipDecayNights > 0) --Next.SkipDecayNights;
     else Next.Pollution = FMath::Max(0, Next.Pollution - FMath::FloorToInt(Decay));
+    if (!ShopEconomy::ApplyNightlySupply(Next, Catalog, Error)) return false;
     Next.Modifiers.RemoveAll([](const FShopModifier& Modifier)
     { return Modifier.Type == EShopEffectType::NightIncomeMultiplier || Modifier.Type == EShopEffectType::CustomerCountDelta; });
     Next.NegativeDays = Next.Money < 0 ? Next.NegativeDays + 1 : 0;
@@ -679,6 +693,22 @@ void UShopRunSubsystem::Commit(FShopRunState&& Next, EShopActionResult Code, FNa
     Next.PeakPollutionThisCommand = 0;
     CheckEnding(Next);
     InjectPendingFakeCustomers(Next);
+    if (Catalog.Rules.bDaytimeOnlyLoop && Next.Phase == EGamePhase::Day && ShopCustomers::AllServed(Next))
+    {
+        // Keep resolved rows until the next day's generation, so the last visitor's
+        // ResolveCustomer callback still receives its result. DispatchModal below
+        // suspends DayEnd if the final sale also crossed a pollution threshold.
+        if (Catalog.Rules.RentTiming == ERentTiming::BeforeDusk && !ShopEconomy::PayRent(Next, Catalog.Rules, Error))
+        { Result(false, EShopActionResult::Rejected, Error); return; }
+        Next.Phase = EGamePhase::DayEnd;
+        Next.ActiveCustomer = INDEX_NONE;
+        CheckEnding(Next);
+    }
+    const EGamePhase QueuePhase = ModalPhase(Next.Phase) ? Next.ResumePhase : Next.Phase;
+    if ((!TradingPhase(QueuePhase) && !SellingPhase(QueuePhase)) || ShopCustomers::AllServed(Next))
+    { Next.bCustomerPresent = false; Next.CustomerArrivalRemaining = 0.f; }
+    else if (!Catalog.Rules.bDaytimeOnlyLoop || !Catalog.Rules.bUseCustomerArrivalDelay)
+    { Next.bCustomerPresent = true; Next.CustomerArrivalRemaining = 0.f; }
     DispatchModal(Next);
     FShopRunState Before = MoveTemp(State);
     State = MoveTemp(Next);
@@ -702,15 +732,35 @@ void UShopRunSubsystem::InjectPendingFakeCustomers(FShopRunState& Next)
     int32 Position = ShopCustomers::Current(Next);
     Position = Position == INDEX_NONE ? Next.Customers.Num() : Position + 1;
     const int32 Count = FMath::Min(Next.PendingFakeCustomers, 100);
+    int32 Injected = 0;
     for (int32 Index = 0; Index < Count; ++Index)
     {
+        int32 ReplaceIndex = INDEX_NONE;
+        if (Catalog.Rules.bDaytimeOnlyLoop)
+        {
+            // The demo always has three visitor slots. A fake may occupy a waiting
+            // ordinary slot, but never append a fourth visitor or replace the active/head visitor.
+            for (int32 Slot = Next.Customers.Num() - 1; Slot >= Position; --Slot)
+            {
+                const FCustomerRuntime& Waiting = Next.Customers[Slot];
+                if (!Waiting.bServed && !Waiting.bFake && Waiting.Kind != ECustomerKind::Secret && Slot != Next.ActiveCustomer)
+                { ReplaceIndex = Slot; break; }
+            }
+            if (ReplaceIndex == INDEX_NONE) break; // Keep the effect pending until another day's queue can accept it.
+        }
         FCustomerRuntime Fake;
         Fake.TemplateId = Template; Fake.Kind = ECustomerKind::Normal; Fake.NeedLayer = EBookLayer::Table;
         Fake.NeedType = EBookType::Novel; Fake.bFake = true; Fake.bPolluted = true;
+        Fake.PortraitSlot = ShopCustomers::ChoosePortrait(Fake.Kind, Next.Day,
+            ReplaceIndex != INDEX_NONE ? ReplaceIndex : Position, Template,
+            Catalog.Rules.bUniqueDailyCustomerPortraits ? Next.Customers : TArray<FCustomerRuntime>(), ReplaceIndex);
+        if (Fake.PortraitSlot == INDEX_NONE) break; // Preserve the pending effect if no unused disguise is available.
         Fake.MaxPatience = Fake.Patience = static_cast<float>(FMath::Max(1, Catalog.Rules.FakeCustomerMaxPollution));
-        Next.Customers.Insert(Fake, Position++);
+        if (ReplaceIndex != INDEX_NONE) Next.Customers[ReplaceIndex] = Fake;
+        else Next.Customers.Insert(Fake, Position++);
+        ++Injected;
     }
-    Next.PendingFakeCustomers -= Count;
+    Next.PendingFakeCustomers -= Injected;
 }
 
 void UShopRunSubsystem::Notify(const FShopRunState& Before, int32 ResolvedCustomer, bool bNewRun)
@@ -770,6 +820,14 @@ void UShopRunSubsystem::Tick(float DeltaTime)
     FShopRunState Next = State;
     const int32 Current = ShopCustomers::Current(Next);
     if (Current == INDEX_NONE) return;
+    if (Catalog.Rules.bDaytimeOnlyLoop && Catalog.Rules.bUseCustomerArrivalDelay && !Next.bCustomerPresent)
+    {
+        Next.CustomerArrivalRemaining = FMath::Max(0.f, Next.CustomerArrivalRemaining - DeltaTime);
+        Next.bCustomerPresent = Next.CustomerArrivalRemaining <= 0.f;
+        // Arrival has its own frame: overshoot never consumes patience or fake-customer pollution.
+        Commit(MoveTemp(Next));
+        return;
+    }
     FCustomerRuntime& Customer = Next.Customers[Current];
     if (Customer.bFake)
     {

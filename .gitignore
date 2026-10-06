@@ -45,6 +45,8 @@
 # Precompiled Assets
 SourceArt/**/*.png
 SourceArt/**/*.tga
+# Retain supplied UI art and the owl source alongside the editable widgets.
+!SourceArt/UI/**/*.png
 
 # Binary Files
 Binaries/*

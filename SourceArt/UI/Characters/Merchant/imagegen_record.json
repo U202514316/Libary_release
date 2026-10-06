@@ -1,0 +1,12 @@
+{
+  "mode": "built-in image_gen",
+  "use_case": "background-extraction",
+  "original_file": "SourceArt/UI/Characters/Merchant/merchant_original.jpg",
+  "original_note": "User attachment is actually a 512x512 JPEG despite its .png filename. Original bytes were preserved.",
+  "output_file": "SourceArt/UI/Characters/Merchant/merchant_cutout.png",
+  "output_note": "Transparent cutout generated from supplied art. This is an AI-assisted edit, not a pixel-identical conversion. Kept white clothing/face opaque; corrected lantern edge.",
+  "prompts": [
+    "Use case: background-extraction\nAsset type: Unreal Engine 5.1 merchant portrait sprite.\nInput image: the provided image is the exact edit target, not a loose reference.\nPrimary request: remove ONLY the exterior white paper background and produce an actual transparent RGBA PNG. Preserve the original hand-drawn merchant exactly as far as possible: same face, round glasses, large dark pointed hat, beard, all pencil/scratchy ink marks, pose, raised right hand, long white robe, staff on the left and warm yellow lantern. Keep white areas belonging to the robe, beard, face, and hands OPAQUE white; do not turn those into holes. Remove the white negative-space background around the entire character, staff and lantern and between separated objects/limbs. Preserve the existing framing and lower-body crop, with the robe reaching the bottom edge. Do not redraw or redesign, do not invent lower legs, do not add shadows, scenery, text or new props. Keep it square, tight framing, fully include the existing hat, lamp and hands. Make the background truly transparent, not a checkerboard image.",
+    "Use case: background-extraction correction.\nEdit target: the transparent merchant cutout. Supporting reference: the original white-background merchant drawing.\nMake one correction ONLY: remove the accidental saturated RED fringe/blotches around the outer LEFT edge of the yellow lantern on the far left. That red mark is not in the reference. The space outside the black lantern outline must be completely transparent. Keep the lantern's yellow fill and black outline intact. Preserve the rest of the target, including face, glasses, beard, hat, staff, robe, pencil texture, pose, cropping and existing transparency. Do not redraw or redesign the character. Keep white robe/beard/skin opaque. Output an RGBA PNG with actual transparency and no red artifacts or checkerboard."
+  ]
+}

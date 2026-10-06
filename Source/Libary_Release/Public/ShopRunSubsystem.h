@@ -65,6 +65,7 @@ public:
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetEndingInfo(EShopEnding Ending, FEndingData& Data) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool CanEnactDecree(FName Id, FText& Reason) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Customers") int32 GetActiveCustomerIndex() const;
+    UFUNCTION(BlueprintPure, Category="Bookstore|Customers") bool IsCurrentCustomerPresent() const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Customers") FText BuildCustomerNeedText(int32 CustomerIndex) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Inventory") bool HasMatchingStock(EBookType Type, EBookLayer Layer) const;
     UFUNCTION(BlueprintCallable, Category="Bookstore|View") bool RegisterView(UObject* View);

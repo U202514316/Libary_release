@@ -33,6 +33,8 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
 {
     Error = FText();
     const FRunRules& R = C.Rules;
+    if (R.bUniqueDailyCustomerPortraits && !R.bDaytimeOnlyLoop)
+        return Fail(Error, TEXT("DT_RunRules.Default: unique daily portraits require the three-customer daytime loop"));
     if (R.StartMoney < 0 || R.StartPsychic < 0 || R.StartPollution < 0 || R.StartEnlighten < 0 || R.MaxDays < 1 || R.MaxDays > 100000 ||
         R.Rent < 0 || R.NegativeDaysToClose < 1 || R.DaysPerWeek < 1 || R.RedeemTarget < 0 ||
         R.EnlightenWin < 0 || R.WinPollutionThreshold < 1 || R.WinPollutionThreshold > R.PollutionLimit)
@@ -43,6 +45,7 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
         !FMath::IsFinite(R.PatienceDropRatePolluted) || R.PatienceDropRatePolluted < 0.f || R.PatienceDropRatePolluted > 10.f)
         return Fail(Error, TEXT("DT_RunRules.Default: invalid psychic cap, initial pollution or patience drain rate"));
     const int32 NonnegativeRules[] = { R.EmergencyPollutionCut, R.EmergencyMoneyCost, R.LightSpreadPerNight,
+        R.NightlyPsychicGain, R.NightlySecretSupply, R.SecretOwnedCap,
         R.FakeCustomerPollutionPerSecond, R.FakeCustomerMaxPollution, R.AlteredBookReadPollution,
         R.ReturnedBookReadPollution, R.ReturnedBookSellPollution, R.ReturnedBookFallbackPollution,
         R.PermanentRentPenalty, R.PermanentCustomerPenalty, R.MaxRentPenalty, R.MaxCustomerPenalty, R.DecreeCooldownTurns };
@@ -56,6 +59,9 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
     if (R.CustomersMin < 0 || R.CustomersMax < R.CustomersMin || R.CustomersMax > 10000 || R.InsideCustomers < 0 || R.InsideCustomers > 10000 ||
         R.WeekTwoCustomerBonus < 0 || R.WeekTwoCustomerBonus > 10000 || R.RandomNeedPool.IsEmpty())
         return Fail(Error, TEXT("DT_RunRules.Default: invalid customer counts or empty RandomNeedPool"));
+    if (!FMath::IsFinite(R.CustomerArrivalMin) || !FMath::IsFinite(R.CustomerArrivalMax) ||
+        R.CustomerArrivalMin < 0.f || R.CustomerArrivalMax < R.CustomerArrivalMin)
+        return Fail(Error, TEXT("DT_RunRules.Default: arrival delays must be finite, nonnegative and ordered"));
     for (const EBookType Type : R.RandomNeedPool)
         if (!StaticEnum<EBookType>()->IsValidEnumValue(static_cast<int64>(Type)) || Type == EBookType::Secret)
             return Fail(Error, TEXT("DT_RunRules.Default.RandomNeedPool: surface needs must be valid non-secret book types"));
@@ -86,7 +92,7 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
         for (FName Clue : B.CluePool) if (Clue.IsNone()) return Fail(Error, Row + TEXT(": CluePool contains None"));
     }
     if (Stock > 100000 || TableCount == 0 || InsideCount == 0) return Fail(Error, TEXT("DT_Books: at most 10000 copies per row / 100000 total, and both Table/Inside layers are required"));
-    bool HasDayCustomer = false, HasNightCustomer = false;
+    bool HasDayCustomer = false, HasNightCustomer = false, HasAlwaysNormal = false;
     TSet<ECustomerKind> Kinds;
     for (const auto& Pair : C.Customers)
     {
@@ -102,10 +108,13 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
             {
                 if (Customer.Kind != ECustomerKind::Polluted) HasNightCustomer = true;
                 if (Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry) HasDayCustomer = true;
+                if (Customer.Kind == ECustomerKind::Normal) HasAlwaysNormal = true;
             }
         }
     }
     if (!HasDayCustomer || (R.InsideCustomers > 0 && !HasNightCustomer)) return Fail(Error, TEXT("DT_Customers: need an always-eligible Normal/Hurry daytime template and an eligible night-time front-shop template"));
+    if (R.bUniqueDailyCustomerPortraits && !HasAlwaysNormal)
+        return Fail(Error, TEXT("DT_Customers: unique daily portraits need an always-eligible Normal template to fill three distinct visitors"));
     for (const auto& Pair : C.Decrees)
     {
         const FDecreeData& D = Pair.Value;

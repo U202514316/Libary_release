@@ -404,6 +404,54 @@ bool ShopEconomy::HasMatchingStock(const FShopRunState& State, const FShopCatalo
     return false;
 }
 
+bool ShopEconomy::ApplyNightlySupply(FShopRunState& State, const FShopCatalog& Catalog, FText& Error)
+{
+    Error = FText::GetEmpty();
+    const FRunRules& Rules = Catalog.Rules;
+    if (Rules.NightlyPsychicGain < 0 || Rules.NightlySecretSupply < 0 || Rules.SecretOwnedCap < 0)
+        return EconomyFail(Error, LOCTEXT("InvalidNightlySupply", "夜间灵能恢复、秘密书补给和拥有上限不能为负数。"));
+    if (Rules.NightlyPsychicGain == 0 && (Rules.NightlySecretSupply == 0 || Rules.SecretOwnedCap == 0)) return true;
+
+    FShopRunState Next = State;
+    if (Rules.NightlyPsychicGain > 0)
+    {
+        if (Rules.PsychicMax < 0 || Next.Psychic < 0)
+            return EconomyFail(Error, LOCTEXT("InvalidNightlyPsychic", "灵能或灵能上限配置无效。"));
+        const int64 Psychic = static_cast<int64>(Next.Psychic) + Rules.NightlyPsychicGain;
+        Next.Psychic = static_cast<int32>(FMath::Min<int64>(Psychic, Rules.PsychicMax));
+    }
+    if (Rules.NightlySecretSupply > 0 && Rules.SecretOwnedCap > 0)
+    {
+        TArray<FName> SecretIds;
+        int64 Owned = 0;
+        for (const auto& Pair : Catalog.Books)
+        {
+            if (!IsInsideBook(Pair.Value)) continue;
+            const FBookRuntime* Book = Next.Inventory.Find(Pair.Key);
+            if (!Book || !IsSecretInventoryValid(*Book))
+                return EconomyFail(Error, LOCTEXT("InvalidSupplyInventory", "秘密书库存与副本记录不一致，无法补给。"));
+            Owned += Book->Stock;
+            SecretIds.Add(Pair.Key);
+        }
+        SecretIds.Sort(FNameLexicalLess());
+        const int64 Amount = FMath::Min<int64>(Rules.NightlySecretSupply, FMath::Max<int64>(0, static_cast<int64>(Rules.SecretOwnedCap) - Owned));
+        if (Amount > 0 && SecretIds.IsEmpty())
+            return EconomyFail(Error, LOCTEXT("NoSupplyBooks", "没有可用于夜间补给的秘密书配置。"));
+        for (int64 CopyIndex = 0; CopyIndex < Amount; ++CopyIndex)
+        {
+            if (!CanAddStock(Next)) return EconomyFail(Error, LOCTEXT("StockOverflow", "库存超出整数范围。"));
+            FName Chosen = SecretIds[0];
+            for (FName Id : SecretIds)
+                if (Next.Inventory.FindChecked(Id).Stock < Next.Inventory.FindChecked(Chosen).Stock) Chosen = Id;
+            FBookRuntime& Book = Next.Inventory.FindChecked(Chosen);
+            Book.SecretCopies.Add(FSecretBookCopy()); // Sealed, unread, unaltered, unpolluted, unlisted.
+            RefreshBookCounts(Book);
+        }
+    }
+    State = MoveTemp(Next);
+    return true;
+}
+
 bool ShopEconomy::PayRent(FShopRunState& State, const FRunRules& Rules, FText& Error)
 {
     Error = FText::GetEmpty();

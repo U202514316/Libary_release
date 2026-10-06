@@ -1,0 +1,109 @@
+{
+  "archive": "角色与猫头鹰立绘.zip",
+  "archive_sha256": "FEA6993E906D800C28979C1B7107BB5729C84BAEBB82208C25F56835F32907DF",
+  "note": "Archive PNGs are unchanged. UMG crops only transparent margins in brush UVs. The archive owl is excluded. The dedicated merchant is an AI-assisted transparent cutout of a separately supplied white-background JPEG; see merchant metadata and imagegen_record.json.",
+  "rows": [
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/戴帽兜的神秘人.PNG",
+      "sha256": "3A6A478B0F3C1CBBD1F07DA3000A99B1E8DDC7038EC4D0C4223A0B36CD3DDFC3",
+      "byte_count": 184489,
+      "role": "秘密顾客，槽5",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Secret.T_Secret",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/赶时间的人.PNG",
+      "sha256": "183523EF8E0DC93D68F18990886EEB858882F3D98C6D20F00719E50F65E49C98",
+      "byte_count": 142099,
+      "role": "急躁顾客，槽4",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Hurry.T_Hurry",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/猫头鹰立绘.PNG",
+      "sha256": "B106FBA93036526C614AFA9D269BED181E20856F60939CF3530045A1E19123B4",
+      "byte_count": 133652,
+      "role": "按用户要求不导入、不替换现有猫头鹰",
+      "texture_object_path": null,
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/主角立绘/主角男装形象.PNG",
+      "sha256": "3C6F7BAEA8269888621B8FAC57F7F1654D966D66EDF0F5FCF4A43566C9A3C889",
+      "byte_count": 110866,
+      "role": "当前主角：男性",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_HeroMale.T_HeroMale",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/主角立绘/主角女装形象.PNG",
+      "sha256": "5928BA3688C1CD35F29B4D8CE7B4D77A09F4621A54D6263C4B6845AFE0FA0143",
+      "byte_count": 188273,
+      "role": "备用主角：不显示",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_HeroFemale.T_HeroFemale",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/普通客人/IMG_6128.PNG",
+      "sha256": "29CB83A147B14AA2F4B55A42609BCD2644504DDBA98DEF4AC4B7665E75B9061A",
+      "byte_count": 167787,
+      "role": "普通顾客，槽0",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Normal01.T_Normal01",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/普通客人/IMG_6130.PNG",
+      "sha256": "4BBCCC794F8C85CF999574724A20C28D09704CA6FF1E8D45E0FA5C53DA69108F",
+      "byte_count": 78575,
+      "role": "普通顾客，槽1",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Normal02.T_Normal02",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/普通客人/IMG_6132.PNG",
+      "sha256": "DAA243EEDBE8D534B648551DD135C3099958D9C09EA076D4764F44CDF1D40071",
+      "byte_count": 115473,
+      "role": "普通顾客，槽2",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Normal03.T_Normal03",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/普通客人/IMG_6133.PNG",
+      "sha256": "6E44EA014E92E54F32B1E13240B4784C10D9EBCE977FA9CB85AD4F66C11F8AEA",
+      "byte_count": 123465,
+      "role": "普通顾客，槽3",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Normal04.T_Normal04",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/被污染的客人/IMG_6125.PNG",
+      "sha256": "8F6DD58611D7CDA32B40A20B2D4DFB1717236A0F3F093C3462E7A19035A11978",
+      "byte_count": 179455,
+      "role": "污染顾客，槽6",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Polluted01.T_Polluted01",
+      "original_bytes_preserved": true
+    },
+    {
+      "source": "SourceArt/UI/Characters/Original/角色与猫头鹰立绘/被污染的客人/IMG_6127.PNG",
+      "sha256": "252A8AD580CF4E1812D7948838AEDA790AAD795404CAE4DC6405A62197E88B90",
+      "byte_count": 186918,
+      "role": "污染顾客，槽7",
+      "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Polluted02.T_Polluted02",
+      "original_bytes_preserved": true
+    }
+  ],
+  "merchant": {
+    "source": "SourceArt/UI/Characters/Merchant/merchant_original.jpg",
+    "source_sha256": "96D433A20EE4FA7D5D0B7F674E6C1878BFD997F263403F9FCD8226BBDDF6A2C8",
+    "source_bytes_preserved": true,
+    "original_actual_format": "JPEG",
+    "processed": "SourceArt/UI/Characters/Merchant/merchant_cutout.png",
+    "processed_sha256": "1EC04DACEEB6C81BEFDFB2822F1C73C3A192F70FBB7E41BA3810301285A1A04A",
+    "processed_size": [
+      1254,
+      1254
+    ],
+    "processing_record": "SourceArt/UI/Characters/Merchant/imagegen_record.json",
+    "texture_object_path": "/Game/ProgramA/UI/Art/Characters/T_Merchant.T_Merchant"
+  }
+}

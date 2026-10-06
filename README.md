@@ -1,35 +1,32 @@
 # Libary_release
 
-## 当前玩法：秘密书上架到表书店（2026-10-06 修订）
+## 当前玩法与控件蓝图入口（2026-10-06 修订）
 
-界面由用户在控件蓝图中制作。C++ 已移除原生文字演示界面及其专用测试，只提供业务接口及可选的根 Widget 创建/注册。最新目标流程是“菜单 → 开场引导 → 白天 3 位顾客（可含秘密顾客）→ 夜间进货/里店上架二选一 → 次日营业”；白天秘密顾客、固定人数、教程衔接及律令资源来源的适配尚未完成，下文阶段表描述的是当前底层能力。
+`/Game/ProgramA/UI`已创建并接通 **15 个可编辑控件蓝图**，包含真实 Designer 控件树与 EventGraph 按钮连线。当前闭环为“主菜单 → 开场引导 → 白天 3 个顾客槽位 → 白天结算 → 夜间普通书进货／里店秘密书上架二选一 → 夜结 → 次日”，并包含污染律令、35 天结局与重开。完整资产清单、逐按钮接口、调参和范围说明见 [控件蓝图闭环使用说明](Docs/控件蓝图闭环使用说明.md)。
 
-所有顾客和交易都发生在表书店。里书店不经营，已支持秘密书上架/撤回；阅读、收取、律令等既有 C++ 能力保留，是否接入由控件蓝图流程决定。此前 Word 计划书中“里书店营业 / InsideSell / 里店顾客”的描述已过时。
+营业页仍只显示表书店一层，不修改原图：`FirstFloorFrame` ScaleBox 位于 `(0,130)`、大小 `1920×900`，内层 SizeBox 为 `1440×675`；背景原图在裁剪 Canvas `FirstFloorScene`中放在 `(-240,-405)`，可见范围为 `x240..1680/y405..1080`。主角 `ShopkeeperGroup`仍在 `(905,200)`、大小 `160×225`，通过 `ShopkeeperFrame → ShopkeeperPortrait`显示男装 `T_HeroMale`，旧几何占位已移除。顾客组改为 `(661,283)`、大小 `320×300`，中心保持不变，使用 8 项 `CustomerPortraits`切换立绘；到场与点击人物后展开需求的流程保持不变。
 
-当前底层尚保留上一版规则：秘密顾客只在夜晚出现。流程为：白天营业 → 日结继续 → 选择里店管理 → 上架秘密书 → 返回夜间表书店 → 接待秘密顾客并售卖 → 夜结。选择进货的夜晚也可返回表书店，出售此前已上架的秘密书；同一夜的活动选择仍互斥。夜间往返管理页不会重新抽顾客，在管理页不会扣顾客耐心。
+三类书卡仍使用 `CardCanvas`和高 `96`的 `DescriptionScroll`，`ActionArea y=446`、`BtnPrimary`高 `48`、里店撤回按钮在动作区 `y=56`，本次不重建书卡。商人 `MerchantFrame → MerchantPortrait`已使用新增的专属 `T_Merchant`立绘。透明 `BtnMerchantHit`打开 `PurchasePanel`，关闭、结束夜晚及下次进入重置流程不变。新原图实际为白底 JPEG，原始字节保存在 `SourceArt/UI/Characters/Merchant/merchant_original.jpg`；内置 image_gen 抠图结果为 `merchant_cutout.png`，完整提示词及处理说明见该目录 `imagegen_record.json`。
 
-### 使用自己的控件蓝图
+在内容浏览器打开 `/Game/ProgramA/UI/Maps/L_BookstoreUI`运行。地图使用 `BP_UIGameMode`与 `BP_UIPlayerController`，后者的 **Root Widget Class**已指向 `WBP_UIRoot`；PlayerController负责创建、显示和注册根控件，不要再次 CreateWidget 或 RegisterView。GameMode已关闭首次自动开局，开场引导结束才调用 `RequestNewRun`。界面布局和连线可直接在 WBP 中修改；业务状态仍由唯一的 `ShopRunSubsystem`持有。
 
-在项目实际使用的 `BP_ShopPlayerController → Class Defaults` 中，将 **Root Widget Class** 设置为用户制作的 `WBP_UIRoot`。根控件需要实现原生 **ShopView** 接口，PlayerController 会创建、显示并注册它；根控件不要重复注册。主菜单、书架、商人和律令页由根控件中的子 Widget 实现。
+UI专用 `DT_RunRules_UI`启用 `bDaytimeOnlyLoop=true`：只有白天营业；秘密顾客根据已上架现货进入白天队列，第一天无上架秘密书时不会生成。夜结恢复 8 灵能，并在秘密书总拥有数不足 7 时合计补 1 册未上架副本；上架状态跨日保留。`DT_Decrees_UI`将四条不适用于新循环的代价改为明确资金消耗，具体对应关系见主说明，原 Release 表不变。夜间页面完成后调用 `RequestEndNight`，不再调用 `RequestOpenTableShop`。
 
-如果希望连根控件的创建也由蓝图负责，将 **Root Widget Class** 留空，C++ 不会自动创建界面；创建自己的根控件后调用 `AttachShopView(View)` 可统一显示并注册。两种创建方式选一种。旧版 **Use Secret Trade Demo UI** 开关已从代码移除，旧设置不会再覆盖根控件。当前仍打开的旧编辑器必须完整编译并重新打开才会加载此变更；在旧版本中可先取消勾选该开关。
+本轮人物包 11 张 512×512 RGBA 原图完整保留在 `SourceArt/UI/Characters/Original/角色与猫头鹰立绘/`，不修改像素。导入 `/Game/ProgramA/UI/Art/Characters/`下 10 张纹理，实际使用 9 张：男装主角；普通 `IMG_6128/6130/6132/6133 → T_Normal01..04`；赶时间的人 `T_Hurry`；帽兜神秘人 `T_Secret`；污染 `IMG_6125/6127 → T_Polluted01/02`。女装 `T_HeroFemale`仅备用。包内猫头鹰不导入、不替换现有 `T_OwlGuide/WBP_OwlTutorial`。Brush 仅裁透明边距的 UV 并设置 ImageSize，ScaleBox 等比显示。 映射清单见 [character_manifest.json](SourceArt/UI/Characters/character_manifest.json)。后续换立绘需按新 PNG 透明边距同时更新 Brush UV 和 ImageSize；仅换 Texture 会沿用旧裁切，可能截断人物或出现额外留白。本次未修改原图像素。
 
-需要先显示主菜单时，在实际使用的 `BP_ShopGameMode` 中关闭 **Start New Run On First Entry**；开场引导结束后由按钮逻辑调用 `RequestNewRun`。以下新增接口可从控件蓝图调用。
+`DT_RunRules_UI`已启用 `bUniqueDailyCustomerPortraits=true`。生成当天三人队伍时，按剩余可用种类的权重抽取，并在 `FCustomerRuntime.PortraitSlot`中固定保留不重复立绘；普通占槽 0–3、急躁 4、秘密 5、污染 6–7。受现有素材数量限制，急躁／秘密每天各最多 1 人，污染最多 2 人，普通补足三人；已接待者的立绘当天仍被占用。次日重新分配，允许不同日期出现同一人物。伪装顾客换入等待槽时也会避开当日已占用的普通立绘。`GetCustomerPortraitSlot`只读取记录，观察、拒绝、售卖或界面刷新不换脸、不额外消耗随机数。
 
-| 按钮/查询 | 原生调用 | 条件与效果 |
-| --- | --- | --- |
-| 进入里店管理 | `RequestOpenInside()` | 黄昏选择里店；或当晚已选择里店时，从 `NightShop` 返回。里店没有交易和顾客计时。 |
-| 上架一册 | `RequestListSecretBook(BookId)` | 仅 `Inside`；从未上架副本中移动一册到表店在架状态。 |
-| 撤回一册 | `RequestUnlistSecretBook(BookId)` | 仅 `Inside`；撤回一册已上架书，总库存不变。 |
-| 返回表书店 | `RequestOpenTableShop()` | 从 `Inside/Restock` 进入 `NightShop`；同夜只生成一次顾客。 |
-| 接待/售卖/取消 | `RequestBeginSell` / `RequestSell` / `RequestCancelSell` | `Day→Sell` 或 `NightShop→NightSell`；只操作当前队首。秘密顾客只买已上架秘密书。 |
-| 已拥有/上架/存放数量 | `GetBookRuntime(BookId)` | 秘密书的 `Stock` 为总拥有数，`ListedCopies + StoredCopies = Stock`。普通书仍读 `Stock`。 |
+**本次顾客去重与专属商人更新已验证：**Editor 编译及局部资产更新成功，43 项经营自动化通过；最终 `UniquePortraits_Merchant_UIVerify.log`为 38,134 项检查、0 失败、0 错误、0 警告，92 张实际渲染，包含 35 天与四结局回归。污染顾客两张图与帽兜神秘人均通过真实生成／按钮流程验证，特殊顾客截图使用明确标记的临时数据条件。当前污染顾客需污染 ≥61、购买普通书，额外交易污染配置为 0；秘密顾客需已上架秘密库存、出售基础加污染 10。当前共 11 张角色纹理（含备用女装），10 张实际使用，猫头鹰未改。本次只将 UI 规则中的去重开关置为 true，并原位替换商人 Brush；保留 `WBP_OwlTutorial/T_OwlGuide/DT_Decrees_UI`哈希。无需手工重建 WBP。
 
-三个新增命令均返回 `FShopCommandResult`。上架不收费、不增污，不修改静态 `FBookData.Layer`；秘密书成交才扣一册、按 `Price` 加钱并按 `PollutionOnSell` 增污，整笔失败不部分扣款。初始 7 种秘密书各 1 册，全部未上架；重开恢复这一状态。旧 `InsideCustomers` 字段为兼容既有表保留，编辑器显示 **Night Table Customers**，现在表示夜间表店人数。`InsideSell` 枚举值保留以避免旧资产值错位，但不再进入。
+**历史 CharacterPortraits 版本：**34,240 项界面检查、85 张图，记录见 `Saved/Logs/CharacterPortraits_UIVerify.log`；当时四个保留资产哈希未变，41 项经营测试来自更早记录。共享 `Verification.txt`现已更新为本次 38,134 项结果。FirstFloorMerchant 的 29,746 项／77 张图和 CounterFlow 的 28,241 项／74 张图仍为历史。尚未进行人工 PIE 鼠标验收，未打包 exe。
 
-污染阈值与结局继续生效。根控件通过 `OpenCalmPanel` 显示用户制作的律令页面，按钮调用 `RequestEnactDecree`；若流程允许跳过，则调用 `RequestSkipDecree`。C++ 通知负责传递状态和结果，不负责生成律令页面。
+本轮 CharacterPortraits 已重跑并通过 35 天与四结局真实按钮回归，结果与此前 FirstFloorMerchant／CounterFlow 相同：原始保存数据下，普通策略种子 731 得到 Cycle（资金 863、启蒙 0、污染 0）；进步书策略种子 731 启蒙 58 仍为 Cycle，种子 732 达到 Returned（资金 981、启蒙 74、污染 0）。原始数据连续拒客可在第 7 天关门（资金 -75）。污染释放仍在**明确的临时增强售卖污染边界场景**中经真实按钮链达到污染 100，不能据此宣称原始数值下的自然完整流程已测。关门、污染释放可早于第 35 天发生；结局页显示条件、最终数值和对应色条，并清空旧 Toast。
 
-本次取消原生界面验证（2026-10-06）：Editor 和 Game 的 Win64 Development 构建均成功（退出码 0），日志分别为 `Saved/Logs/BlueprintUIOnly_EditorBuild.log` 和 `Saved/Logs/BlueprintUIOnly_GameBuild.log`。演示界面及其专用测试删除后，36 项经营自动化测试全部成功，警告/失败/未运行均为 0；报告见 [自动化结果](Saved/Automation/BlueprintUIOnly_20261006_Final/index.json)。这些结果验证现有底层规则，不代表新版白天秘密顾客流程或用户控件蓝图已完成，也不代替 PIE 和打包验收。
+七条律令核心执行和弹窗可用，但 TTL／冷却状态展示及实际反噬播报尚缺；固定 3 客模式下无名律的客流惩罚不改变人数，闭架律额外阅读污染暂缺阅读入口，不能视为全部完成。历史继续延期，黑市、完整猫头鹰台词与存档不在本轮完成声明中。
+
+本次已执行 `-run=ShopUIBuild -UpgradeUniquePortraits`（只开 UI 去重选项）和 `-UpgradeMerchantPortrait`（只替换商人 Brush）；备份在 `Saved/Backups/BeforeUniqueDailyPortraits_20261006_232341`。旧 `-UpgradeCharacterPortraits`会重建 SurfaceShop／Merchant／Root 及入口，`-UpgradeSceneLayout/-UpgradeCounterFlow/-Rebuild`也会覆盖各自范围的图表，**已有手工编辑后切勿直接重跑**。旧备份与迁移记录保留作历史，无需用户补做这些步骤。日常在 Designer／EventGraph 修改并 Compile、Save；复查使用 `ShopUIVerify`。
+
+旧规则兼容说明：当 `bDaytimeOnlyLoop=false`时，底层仍保留旧版 `NightShop/NightSell`夜间表店交易和 `InsideCustomers`字段，以兼容旧表与测试；它们不是当前 UI 的玩法。`InsideSell`只保留枚举值，旧 Word 中里店经营的描述已过时。下文 Hello 示例以及旧版 29／36／38 项测试记录属于历史参考，当前状态以本节及主说明页首为准。旧版取消原生演示界面的验证记录见 [历史自动化结果](Saved/Automation/BlueprintUIOnly_20261006_Final/index.json)。
 
 ## C++ → 蓝图调用示例（UE 5.1.1）
 

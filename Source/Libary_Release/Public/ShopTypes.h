@@ -95,6 +95,8 @@ struct LIBARY_RELEASE_API FCustomerRuntime
     // Requested book origin. All customers are physically at the front shop.
     UPROPERTY(BlueprintReadOnly) EBookLayer NeedLayer = EBookLayer::Table;
     UPROPERTY(BlueprintReadOnly) ECustomerKind Kind = ECustomerKind::Normal;
+    // Fixed when the queue is generated. Matches WBP_SurfaceShop.CustomerPortraits (0..7).
+    UPROPERTY(BlueprintReadOnly) int32 PortraitSlot = INDEX_NONE;
     UPROPERTY(BlueprintReadOnly) bool bServed = false;
     UPROPERTY(BlueprintReadOnly) bool bPolluted = false;
     UPROPERTY(BlueprintReadOnly) bool bSecret = false;
@@ -143,6 +145,16 @@ struct LIBARY_RELEASE_API FRunRules : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) ERentTiming RentTiming = ERentTiming::BeforeDusk;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 NegativeDaysToClose = 3;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bImmediateBankruptcy = false;
+    // Dedicated playable UI loop: three base daytime visitors, then one nighttime stock activity.
+    // False preserves the earlier optional nighttime trading flow and its authored rules.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bDaytimeOnlyLoop = false;
+    // Three-visitor UI loop: draw without replacement from the supplied character portraits.
+    // Legacy tables opt out; the UI rules explicitly enable this.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bUniqueDailyCustomerPortraits = false;
+    // Arrival waits apply only to the dedicated daytime loop; legacy tables stay immediate.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bUseCustomerArrivalDelay = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) float CustomerArrivalMin = 2.f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) float CustomerArrivalMax = 4.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 CustomersMin = 3;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 CustomersMax = 5;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 WeekTwoCustomerBonus = 1;
@@ -162,6 +174,10 @@ struct LIBARY_RELEASE_API FRunRules : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float PatienceDropRatePolluted = 0.3f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 StartPsychic = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PsychicMax = 100;
+    // Optional simple nightly supply; zero disables each resource grant for legacy tables.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 NightlyPsychicGain = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 NightlySecretSupply = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 SecretOwnedCap = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 StartPollution = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 StartEnlighten = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 RedeemTarget = 1500;
@@ -332,6 +348,8 @@ struct LIBARY_RELEASE_API FRunSnapshot
     UPROPERTY(BlueprintReadOnly) int32 Rent = 0;
     UPROPERTY(BlueprintReadOnly) int32 Turn = 0;
     UPROPERTY(BlueprintReadOnly) int32 NegativeDays = 0;
+    UPROPERTY(BlueprintReadOnly) bool bCustomerPresent = false;
+    UPROPERTY(BlueprintReadOnly) float CustomerArrivalRemaining = 0.f;
     UPROPERTY(BlueprintReadOnly) EGamePhase Phase = EGamePhase::Boot;
     UPROPERTY(BlueprintReadOnly) ENightChoice NightChoice = ENightChoice::None;
     UPROPERTY(BlueprintReadOnly) EShopEnding Ending = EShopEnding::None;
@@ -389,6 +407,8 @@ struct FShopRunState
     bool bPollutionLimitReached = false;
     bool bPendingCalm = false;
     bool bNightCustomersGenerated = false;
+    bool bCustomerPresent = false;
+    float CustomerArrivalRemaining = 0.f;
     EGamePhase Phase = EGamePhase::Boot;
     EGamePhase ResumePhase = EGamePhase::Boot;
     ENightChoice NightChoice = ENightChoice::None;
