@@ -17,6 +17,7 @@ public:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+    /** Optional user-authored root widget implementing ShopView. Leave unset to create/register the UI in Blueprint. */
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Bookstore|UI") TSubclassOf<UUserWidget> RootWidgetClass;
     UPROPERTY(BlueprintReadOnly, Transient, Category="Bookstore|UI") TObjectPtr<UUserWidget> RootWidget;
     UFUNCTION(BlueprintPure, Category="Bookstore|Service") UShopRunSubsystem* GetShopRun() const;

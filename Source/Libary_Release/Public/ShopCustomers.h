@@ -6,6 +6,9 @@
 /** A queue: only the first unresolved customer can be served or lose patience. */
 namespace ShopCustomers
 {
+    // All customers visit the surface shop. Time controls the count and eligible roles.
+    LIBARY_RELEASE_API bool GenerateForTime(FShopRunState& State, const FShopCatalog& Catalog, bool bNight, FText& Error);
+    // Legacy mapping: Table means daytime; Inside means nighttime, not a customer location.
     LIBARY_RELEASE_API bool Generate(FShopRunState& State, const FShopCatalog& Catalog, EBookLayer Layer, FText& Error);
     LIBARY_RELEASE_API int32 Current(const FShopRunState& State);
     LIBARY_RELEASE_API bool AllServed(const FShopRunState& State);

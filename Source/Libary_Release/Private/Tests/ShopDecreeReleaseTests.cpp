@@ -258,7 +258,7 @@ bool FShopDecreeModifiersReleaseTest::RunTest(const FString& Parameters)
     FShopRunState State;
     State.Random.Initialize(17);
     State.Phase = EGamePhase::Calm;
-    State.ResumePhase = EGamePhase::Inside;
+    State.ResumePhase = EGamePhase::NightShop;
     State.Customers.SetNum(3);
     State.ActiveCustomer = 0;
     State.Customers[1].bFake = true;
@@ -272,7 +272,7 @@ bool FShopDecreeModifiersReleaseTest::RunTest(const FString& Parameters)
     }
     TestEqual(TEXT("Recurring fee is not stacked on re-enactment"), ShopEffects::Sum(State, EShopEffectType::NightlyMoney), -30);
     TestEqual(TEXT("Recurring backlash is not stacked"), ShopEffects::Sum(State, EShopEffectType::NightlyPollution), 3);
-    TestTrue(TEXT("Last eligible inside customer is removed"), State.Customers[2].bServed);
+    TestTrue(TEXT("Last eligible night storefront customer is removed"), State.Customers[2].bServed);
     TestFalse(TEXT("Active customer is preserved"), State.Customers[0].bServed);
     TestFalse(TEXT("Fake customer is preserved"), State.Customers[1].bServed);
     TestTrue(TEXT("Fake, decay and reset effects enqueue work"), ShopEffects::Apply(State, Catalog,

@@ -25,6 +25,7 @@ void AShopPlayerController::BeginPlay()
     Mode.SetHideCursorDuringCapture(false);
     Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
     SetInputMode(Mode);
+    // Presentation is selected by the project's Widget Blueprint, never by a native demo override.
     if (RootWidgetClass) AttachShopView(CreateWidget<UUserWidget>(this, RootWidgetClass));
 }
 

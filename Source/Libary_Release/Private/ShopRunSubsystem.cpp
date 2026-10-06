@@ -27,8 +27,8 @@ namespace
         }
         return true;
     }
-    bool TradingPhase(EGamePhase Phase) { return Phase == EGamePhase::Day || Phase == EGamePhase::Inside; }
-    bool SellingPhase(EGamePhase Phase) { return Phase == EGamePhase::Sell || Phase == EGamePhase::InsideSell; }
+    bool TradingPhase(EGamePhase Phase) { return Phase == EGamePhase::Day || Phase == EGamePhase::NightShop; }
+    bool SellingPhase(EGamePhase Phase) { return Phase == EGamePhase::Sell || Phase == EGamePhase::NightSell; }
     bool ModalPhase(EGamePhase Phase) { return Phase == EGamePhase::Calm || Phase == EGamePhase::History; }
     FText EndingText(EShopEnding Ending)
     {
@@ -144,12 +144,13 @@ bool UShopRunSubsystem::StartDay(FShopRunState& Next, FText& Error)
     Next.Phase = EGamePhase::Day;
     Next.ResumePhase = EGamePhase::Day;
     Next.NightChoice = ENightChoice::None;
+    Next.bNightCustomersGenerated = false;
     Next.TodayIncome = 0;
     Next.TodayExpense = 0;
     Next.ActiveCustomer = INDEX_NONE;
     Next.MarketStock.Reset();
     Next.MarketSold.Reset();
-    if (!ShopCustomers::Generate(Next, Catalog, EBookLayer::Table, Error)) return false;
+    if (!ShopCustomers::GenerateForTime(Next, Catalog, false, Error)) return false;
     Next.DecreeCandidates.Reset();
     QueueEvents(Next, EShopEventTrigger::OnDayStart);
     return true;
@@ -237,7 +238,7 @@ EShopActionResult UShopRunSubsystem::RequestBeginSell_Implementation(int32 Custo
         return EShopActionResult::NoMatch;
     }
     Next.ActiveCustomer = CustomerIndex;
-    Next.Phase = State.Phase == EGamePhase::Inside ? EGamePhase::InsideSell : EGamePhase::Sell;
+    Next.Phase = State.Phase == EGamePhase::NightShop ? EGamePhase::NightSell : EGamePhase::Sell;
     Commit(MoveTemp(Next), EShopActionResult::Opened);
     return LastResult.Code;
 }
@@ -247,7 +248,7 @@ void UShopRunSubsystem::CompleteCustomer(FShopRunState& Next, int32 Index, EShop
     ShopCustomers::Complete(Next, Index, Code);
     Next.ActiveCustomer = INDEX_NONE;
     if (Next.Phase == EGamePhase::Sell) Next.Phase = EGamePhase::Day;
-    else if (Next.Phase == EGamePhase::InsideSell) Next.Phase = EGamePhase::Inside;
+    else if (Next.Phase == EGamePhase::NightSell) Next.Phase = EGamePhase::NightShop;
 }
 
 EShopActionResult UShopRunSubsystem::RequestSell_Implementation(FName BookId)
@@ -270,7 +271,7 @@ bool UShopRunSubsystem::RequestCancelSell_Implementation()
     if (!ReadyForCommand()) return false;
     if (!SellingPhase(State.Phase)) { Reject(EShopActionResult::InvalidPhase, TEXT("当前没有选书操作。")); return false; }
     FShopRunState Next = State;
-    Next.Phase = Next.Phase == EGamePhase::Sell ? EGamePhase::Day : EGamePhase::Inside;
+    Next.Phase = Next.Phase == EGamePhase::Sell ? EGamePhase::Day : EGamePhase::NightShop;
     Next.ActiveCustomer = INDEX_NONE;
     Commit(MoveTemp(Next), EShopActionResult::Cancelled);
     return LastResult.bSucceeded;
@@ -311,6 +312,9 @@ bool UShopRunSubsystem::RequestEndDay_Implementation()
     if (Catalog.Rules.RentTiming == ERentTiming::BeforeDusk && !ShopEconomy::PayRent(Next, Catalog.Rules, Error))
     { Result(false, EShopActionResult::Rejected, Error); return false; }
     Next.Phase = EGamePhase::DayEnd;
+    // An early close dismisses the remaining daytime queue; it must not leak into storage/night.
+    Next.Customers.Reset();
+    Next.ActiveCustomer = INDEX_NONE;
     Commit(MoveTemp(Next)); return LastResult.bSucceeded;
 }
 
@@ -319,7 +323,7 @@ bool UShopRunSubsystem::RequestContinue_Implementation()
     if (!ReadyForCommand()) return false;
     if (State.Phase == EGamePhase::DayEnd)
     { FShopRunState Next = State; Next.Phase = EGamePhase::DuskChoice; Commit(MoveTemp(Next)); return LastResult.bSucceeded; }
-    if (State.Phase == EGamePhase::Restock || State.Phase == EGamePhase::Inside) return RequestEndNight_Implementation().bSucceeded;
+    if (State.Phase == EGamePhase::Restock || State.Phase == EGamePhase::Inside || State.Phase == EGamePhase::NightShop) return RequestEndNight_Implementation().bSucceeded;
     if (State.Phase == EGamePhase::NightEnd)
     {
         if (Catalog.Rules.bEnableMarket && State.Day % Catalog.Rules.DaysPerWeek == 0 && State.LastMarketDay != State.Day)
@@ -333,6 +337,8 @@ bool UShopRunSubsystem::RequestContinue_Implementation()
 FShopCommandResult UShopRunSubsystem::RequestOpenRestock_Implementation()
 {
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (State.Phase == EGamePhase::NightShop && State.NightChoice == ENightChoice::Restock)
+    { FShopRunState Next = State; Next.Phase = EGamePhase::Restock; Commit(MoveTemp(Next)); return LastResult; }
     if (State.Phase != EGamePhase::DuskChoice || State.NightChoice != ENightChoice::None)
         return Reject(EShopActionResult::InvalidPhase, TEXT("今晚已经选择活动，不能再次选择进货。"));
     FShopRunState Next = State; Next.NightChoice = ENightChoice::Restock; Next.Phase = EGamePhase::Restock;
@@ -342,6 +348,12 @@ FShopCommandResult UShopRunSubsystem::RequestOpenRestock_Implementation()
 FShopCommandResult UShopRunSubsystem::RequestOpenInside_Implementation()
 {
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (State.Phase == EGamePhase::NightShop && State.NightChoice == ENightChoice::Inside)
+    {
+        // Returning to management pauses the existing queue. No new customers or collection offers.
+        FShopRunState Next = State; Next.Phase = EGamePhase::Inside;
+        Commit(MoveTemp(Next)); return LastResult;
+    }
     if (State.Phase != EGamePhase::DuskChoice || State.NightChoice != ENightChoice::None)
         return Reject(EShopActionResult::InvalidPhase, TEXT("今晚已经选择活动，不能再次进入里书店。"));
     FShopRunState Next = State;
@@ -349,9 +361,42 @@ FShopCommandResult UShopRunSubsystem::RequestOpenInside_Implementation()
     if (Catalog.Rules.bRefillSecretOffersEachNight)
         for (const auto& Book : Catalog.Books) if (Book.Value.Layer == EBookLayer::Inside)
             Next.Inventory.FindChecked(Book.Key).AvailableToCollect = Book.Value.CollectOfferPerNight;
-    FText Error;
-    if (!ShopCustomers::Generate(Next, Catalog, EBookLayer::Inside, Error)) return Result(false, EShopActionResult::InvalidConfig, Error);
     Commit(MoveTemp(Next)); return LastResult;
+}
+
+FShopCommandResult UShopRunSubsystem::RequestOpenTableShop_Implementation()
+{
+    if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if ((State.Phase != EGamePhase::Inside || State.NightChoice != ENightChoice::Inside) &&
+        (State.Phase != EGamePhase::Restock || State.NightChoice != ENightChoice::Restock))
+        return Reject(EShopActionResult::InvalidPhase, TEXT("请先完成夜间选择，再返回表书店营业。"));
+    FShopRunState Next = State;
+    Next.Phase = EGamePhase::NightShop;
+    if (!Next.bNightCustomersGenerated)
+    {
+        FText Error;
+        if (!ShopCustomers::GenerateForTime(Next, Catalog, true, Error)) return Result(false, EShopActionResult::InvalidConfig, Error);
+        Next.bNightCustomersGenerated = true;
+    }
+    Commit(MoveTemp(Next)); return LastResult;
+}
+
+FShopCommandResult UShopRunSubsystem::RequestListSecretBook_Implementation(FName BookId)
+{
+    if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (State.Phase != EGamePhase::Inside) return Reject(EShopActionResult::InvalidPhase, TEXT("请在里书店管理库存时上架秘密书。"));
+    FShopRunState Next = State; FText Error;
+    if (!ShopEconomy::SetSecretListing(Next, Catalog, BookId, true, Error)) return Result(false, EShopActionResult::Rejected, Error, BookId);
+    Commit(MoveTemp(Next), EShopActionResult::Success, BookId); return LastResult;
+}
+
+FShopCommandResult UShopRunSubsystem::RequestUnlistSecretBook_Implementation(FName BookId)
+{
+    if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (State.Phase != EGamePhase::Inside) return Reject(EShopActionResult::InvalidPhase, TEXT("请在里书店管理库存时撤回秘密书。"));
+    FShopRunState Next = State; FText Error;
+    if (!ShopEconomy::SetSecretListing(Next, Catalog, BookId, false, Error)) return Result(false, EShopActionResult::Rejected, Error, BookId);
+    Commit(MoveTemp(Next), EShopActionResult::Success, BookId); return LastResult;
 }
 
 bool UShopRunSubsystem::RequestRestock_Implementation(FName BookId)
@@ -532,7 +577,7 @@ bool UShopRunSubsystem::ResolveHeavyWindow(FShopRunState& Next, FText& Error)
 FShopCommandResult UShopRunSubsystem::RequestEndNight_Implementation()
 {
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
-    if (State.Phase != EGamePhase::Inside && State.Phase != EGamePhase::Restock)
+    if (State.Phase != EGamePhase::Inside && State.Phase != EGamePhase::Restock && State.Phase != EGamePhase::NightShop)
         return Reject(EShopActionResult::InvalidPhase, TEXT("只能在夜间活动结束后结算。"));
     FShopRunState Next = State; FText Error;
     if (!SettleNight(Next, Error)) return Result(false, EShopActionResult::Rejected, Error);
@@ -645,20 +690,23 @@ void UShopRunSubsystem::Commit(FShopRunState&& Next, EShopActionResult Code, FNa
 
 void UShopRunSubsystem::InjectPendingFakeCustomers(FShopRunState& Next)
 {
-    const bool bInside = Next.Phase == EGamePhase::Inside || Next.Phase == EGamePhase::InsideSell ||
-        (ModalPhase(Next.Phase) && (Next.ResumePhase == EGamePhase::Inside || Next.ResumePhase == EGamePhase::InsideSell));
-    if (!bInside || Next.PendingFakeCustomers <= 0) return;
+    const bool bFrontShop = TradingPhase(Next.Phase) || SellingPhase(Next.Phase) ||
+        (ModalPhase(Next.Phase) && (TradingPhase(Next.ResumePhase) || SellingPhase(Next.ResumePhase)));
+    if (!bFrontShop || Next.PendingFakeCustomers <= 0) return;
     TArray<FName> Ids; Catalog.Customers.GetKeys(Ids); Ids.Sort(FNameLexicalLess());
     FName Template;
     for (FName Id : Ids) if (Catalog.Customers[Id].Kind == ECustomerKind::Normal) { Template = Id; break; }
+    if (Template.IsNone())
+        for (FName Id : Ids) if (Catalog.Customers[Id].Kind == ECustomerKind::Hurry) { Template = Id; break; }
+    if (Template.IsNone()) return; // A valid catalog guarantees at least one ordinary customer template.
     int32 Position = ShopCustomers::Current(Next);
     Position = Position == INDEX_NONE ? Next.Customers.Num() : Position + 1;
     const int32 Count = FMath::Min(Next.PendingFakeCustomers, 100);
     for (int32 Index = 0; Index < Count; ++Index)
     {
         FCustomerRuntime Fake;
-        Fake.TemplateId = Template; Fake.Kind = ECustomerKind::Normal; Fake.NeedLayer = EBookLayer::Inside;
-        Fake.NeedType = EBookType::Secret; Fake.bFake = true; Fake.bPolluted = true;
+        Fake.TemplateId = Template; Fake.Kind = ECustomerKind::Normal; Fake.NeedLayer = EBookLayer::Table;
+        Fake.NeedType = EBookType::Novel; Fake.bFake = true; Fake.bPolluted = true;
         Fake.MaxPatience = Fake.Patience = static_cast<float>(FMath::Max(1, Catalog.Rules.FakeCustomerMaxPollution));
         Next.Customers.Insert(Fake, Position++);
     }

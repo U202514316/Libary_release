@@ -30,6 +30,10 @@ public:
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestObserveCustomer(int32 CustomerIndex);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestRejectCustomer(int32 CustomerIndex);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestOpenInside();
+    // Inside is inventory management. Night-time trading resumes at the front shop.
+    UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestOpenTableShop();
+    UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestListSecretBook(FName BookId);
+    UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestUnlistSecretBook(FName BookId);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestOpenRestock();
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestCollectSecret(FName BookId);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestReadSecret(FName BookId);

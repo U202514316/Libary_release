@@ -86,7 +86,7 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
         for (FName Clue : B.CluePool) if (Clue.IsNone()) return Fail(Error, Row + TEXT(": CluePool contains None"));
     }
     if (Stock > 100000 || TableCount == 0 || InsideCount == 0) return Fail(Error, TEXT("DT_Books: at most 10000 copies per row / 100000 total, and both Table/Inside layers are required"));
-    bool HasSurfaceCustomer = false, HasInsideCustomer = false;
+    bool HasDayCustomer = false, HasNightCustomer = false;
     TSet<ECustomerKind> Kinds;
     for (const auto& Pair : C.Customers)
     {
@@ -100,12 +100,12 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
         {
             if (Customer.MinPollution == 0 && Customer.MaxPollution >= R.PollutionLimit - 1)
             {
-                HasInsideCustomer = true;
-                if (Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry) HasSurfaceCustomer = true;
+                if (Customer.Kind != ECustomerKind::Polluted) HasNightCustomer = true;
+                if (Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry) HasDayCustomer = true;
             }
         }
     }
-    if (!HasSurfaceCustomer || (R.InsideCustomers > 0 && !HasInsideCustomer)) return Fail(Error, TEXT("DT_Customers: need an always-eligible Normal/Hurry surface template and an eligible inside template"));
+    if (!HasDayCustomer || (R.InsideCustomers > 0 && !HasNightCustomer)) return Fail(Error, TEXT("DT_Customers: need an always-eligible Normal/Hurry daytime template and an eligible night-time front-shop template"));
     for (const auto& Pair : C.Decrees)
     {
         const FDecreeData& D = Pair.Value;

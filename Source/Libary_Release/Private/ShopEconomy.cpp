@@ -78,22 +78,42 @@ namespace
     }
 }
 
+bool ShopEconomy::IsSecretInventoryValid(const FBookRuntime& Book)
+{
+    if (!ValidInventory(Book) || Book.Stock != Book.SecretCopies.Num()) return false;
+    int32 Read = 0;
+    int32 Listed = 0;
+    bool bAltered = false;
+    for (const FSecretBookCopy& Copy : Book.SecretCopies)
+    {
+        if (Copy.bRead) ++Read;
+        if (Copy.bListedForSale) ++Listed;
+        bAltered |= Copy.bAltered;
+    }
+    return Book.ReadCopies == Read && Book.ListedCopies == Listed &&
+        Book.StoredCopies == Book.Stock - Listed && Book.bAltered == bAltered;
+}
+
 void ShopEconomy::RefreshBookCounts(FBookRuntime& Book)
 {
     Book.Stock = Book.SecretCopies.Num();
     Book.ReadCopies = 0;
+    Book.ListedCopies = 0;
+    Book.StoredCopies = 0;
     Book.bAltered = false;
     for (const FSecretBookCopy& Copy : Book.SecretCopies)
     {
         if (Copy.bRead) ++Book.ReadCopies;
+        if (Copy.bListedForSale) ++Book.ListedCopies;
+        else ++Book.StoredCopies;
         Book.bAltered |= Copy.bAltered;
     }
 }
 
 void ShopEconomy::NormalizeSecretCopies(FBookRuntime& Book)
 {
-    // Compatibility for older in-memory callers. Once a copy list exists, aggregate
-    // fields never overwrite the individual copy flags.
+    // Explicit compatibility conversion for old fixtures, never an implicit live-state repair.
+    // Once a copy list exists, aggregate fields never overwrite the individual copy flags.
     if (Book.SecretCopies.IsEmpty() && Book.Stock > 0)
     {
         Book.SecretCopies.SetNum(Book.Stock);
@@ -103,6 +123,7 @@ void ShopEconomy::NormalizeSecretCopies(FBookRuntime& Book)
             Copy.bRead = Index < Book.ReadCopies;
             Copy.bSealed = true;
             Copy.bAltered = Book.bAltered;
+            Copy.bListedForSale = false;
         }
     }
     RefreshBookCounts(Book);
@@ -123,7 +144,9 @@ void ShopEconomy::Reset(FShopRunState& State, const FShopCatalog& Catalog)
         if (Pair.Value.Layer == EBookLayer::Inside)
         {
             Runtime.AvailableToCollect = Pair.Value.CollectOfferPerNight;
-            NormalizeSecretCopies(Runtime);
+            // The validated catalog explicitly grants these new, unlisted copies at run start.
+            Runtime.SecretCopies.SetNum(Runtime.Stock);
+            RefreshBookCounts(Runtime);
         }
         State.Inventory.Add(Pair.Key, Runtime);
     }
@@ -165,7 +188,7 @@ bool ShopEconomy::Collect(FShopRunState& State, const FShopCatalog& Catalog, FNa
     const FBookData* Book = Catalog.Books.Find(BookId);
     FBookRuntime* Runtime = State.Inventory.Find(BookId);
     if (!Book || !Runtime) return EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
-    if (!IsInsideBook(*Book) || !ValidInventory(*Runtime))
+    if (!IsInsideBook(*Book) || !IsSecretInventoryValid(*Runtime))
         return EconomyFail(Error, LOCTEXT("CannotCollect", "只有有效的里世界密文书可以收取。"));
     if (Runtime->AvailableToCollect <= 0) return EconomyFail(Error, LOCTEXT("NoOffer", "本晚已没有这本书可供收取。"));
     if (Catalog.Rules.CollectPsychicCost < 0 || State.Psychic < Catalog.Rules.CollectPsychicCost)
@@ -173,11 +196,11 @@ bool ShopEconomy::Collect(FShopRunState& State, const FShopCatalog& Catalog, FNa
     if (!CanAddStock(State)) return EconomyFail(Error, LOCTEXT("StockOverflow", "库存超出整数范围。"));
     FShopRunState Next = State;
     FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
-    NormalizeSecretCopies(NextBook);
     if (!AddPollution(Next, Catalog, Catalog.Rules.PollutionOnCollect, Error)) return false;
     Next.Psychic -= Catalog.Rules.CollectPsychicCost;
     FSecretBookCopy Copy;
     Copy.bSealed = true;
+    Copy.bListedForSale = false;
     NextBook.SecretCopies.Add(Copy);
     --NextBook.AvailableToCollect;
     RefreshBookCounts(NextBook);
@@ -191,14 +214,13 @@ bool ShopEconomy::Read(FShopRunState& State, const FShopCatalog& Catalog, FName 
     const FBookData* Book = Catalog.Books.Find(BookId);
     FBookRuntime* Runtime = State.Inventory.Find(BookId);
     if (!Book || !Runtime) return EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
-    if (!IsInsideBook(*Book) || !ValidInventory(*Runtime))
+    if (!IsInsideBook(*Book) || !IsSecretInventoryValid(*Runtime))
         return EconomyFail(Error, LOCTEXT("CannotRead", "只有有效的里世界密文书可以阅读。"));
     if (Runtime->Stock <= 0) return EconomyFail(Error, LOCTEXT("NoOwnedBook", "库存中没有这本书。"));
     if (!Catalog.Rules.bAllowRepeatRead && Runtime->ReadCopies >= Runtime->Stock)
         return EconomyFail(Error, LOCTEXT("AlreadyRead", "已读完库存中的每一本书。"));
     FShopRunState Next = State;
     FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
-    NormalizeSecretCopies(NextBook);
     int32 CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([](const FSecretBookCopy& Copy) { return !Copy.bRead; });
     if (CopyIndex == INDEX_NONE && Catalog.Rules.bAllowRepeatRead && !NextBook.SecretCopies.IsEmpty()) CopyIndex = 0;
     if (CopyIndex == INDEX_NONE) return EconomyFail(Error, LOCTEXT("AlreadyRead", "已读完库存中的每一本书。"));
@@ -234,6 +256,31 @@ bool ShopEconomy::Read(FShopRunState& State, const FShopCatalog& Catalog, FName 
     return true;
 }
 
+bool ShopEconomy::SetSecretListing(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, bool bListed, FText& Error)
+{
+    Error = FText::GetEmpty();
+    const FBookData* Book = Catalog.Books.Find(BookId);
+    const FBookRuntime* Runtime = State.Inventory.Find(BookId);
+    if (!Book || !Runtime) return EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
+    if (!IsInsideBook(*Book) || !IsSecretInventoryValid(*Runtime))
+        return EconomyFail(Error, LOCTEXT("CannotList", "只有有效的秘密书库存可以上架或下架。"));
+
+    FShopRunState Next = State;
+    FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
+    const int32 CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([bListed](const FSecretBookCopy& Copy)
+    {
+        return Copy.bListedForSale != bListed;
+    });
+    if (CopyIndex == INDEX_NONE)
+        return EconomyFail(Error, bListed
+            ? LOCTEXT("NoStoredCopy", "没有未上架的秘密书可供上架。")
+            : LOCTEXT("NoListedCopy", "没有已上架的秘密书可供下架。"));
+    NextBook.SecretCopies[CopyIndex].bListedForSale = bListed;
+    RefreshBookCounts(NextBook);
+    State = MoveTemp(Next);
+    return true;
+}
+
 EShopActionResult ShopEconomy::Sell(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, const FCustomerRuntime& Customer, FText& Error)
 {
     Error = FText::GetEmpty();
@@ -244,13 +291,19 @@ EShopActionResult ShopEconomy::Sell(FShopRunState& State, const FShopCatalog& Ca
         EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
         return EShopActionResult::InvalidId;
     }
-    const bool bValidKind = Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry ||
-        Customer.Kind == ECustomerKind::Secret || Customer.Kind == ECustomerKind::Polluted;
-    const bool bInsideCustomer = Customer.NeedLayer == EBookLayer::Inside && bValidKind && Customer.NeedType == EBookType::Secret;
+    const bool bSecretBook = IsInsideBook(*Book);
+    if (bSecretBook && !IsSecretInventoryValid(*Runtime))
+    {
+        EconomyFail(Error, LOCTEXT("InvalidSecretInventory", "秘密书库存与副本记录不一致，无法交易。"));
+        return EShopActionResult::Rejected;
+    }
+    // NeedLayer describes the requested book's origin; every customer trades in the surface shop.
+    const bool bSecretCustomer = Customer.Kind == ECustomerKind::Secret &&
+        Customer.NeedLayer == EBookLayer::Inside && Customer.NeedType == EBookType::Secret;
     const bool bTableCustomer = Customer.NeedLayer == EBookLayer::Table &&
-        (Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry) &&
+        (Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry || Customer.Kind == ECustomerKind::Polluted) &&
         (Customer.NeedType == EBookType::Novel || Customer.NeedType == EBookType::Poem || Customer.NeedType == EBookType::History);
-    if (Customer.bServed || (!bInsideCustomer && !bTableCustomer) || !ValidInventory(*Runtime))
+    if (Customer.bServed || Customer.bFake || (!bSecretCustomer && !bTableCustomer) || !ValidInventory(*Runtime))
     {
         EconomyFail(Error, LOCTEXT("InvalidCustomer", "顾客已离开或交易数据无效。"));
         return EShopActionResult::Rejected;
@@ -265,8 +318,11 @@ EShopActionResult ShopEconomy::Sell(FShopRunState& State, const FShopCatalog& Ca
         EconomyFail(Error, LOCTEXT("WrongBook", "这本书不符合顾客的需求。"));
         return EShopActionResult::WrongBook;
     }
+    const bool bNightSale = State.Phase == EGamePhase::NightShop || State.Phase == EGamePhase::NightSell;
+    const EShopEffectType IncomeType = bSecretBook ? EShopEffectType::IncomeMultiplier : EShopEffectType::NightIncomeMultiplier;
     int32 Income = Book->Price;
-    if (Book->Price < 0 || (bInsideCustomer && !ScaledGain(State, EShopEffectType::IncomeMultiplier, Book->Price, Income, Error, true)))
+    if (Book->Price < 0 || ((bSecretBook || bNightSale) &&
+        !ScaledGain(State, IncomeType, Book->Price, Income, Error, bSecretBook && bNightSale)))
     {
         if (Error.IsEmpty()) EconomyFail(Error, LOCTEXT("InvalidPrice", "售价配置无效。"));
         return EShopActionResult::InvalidConfig;
@@ -284,13 +340,17 @@ EShopActionResult ShopEconomy::Sell(FShopRunState& State, const FShopCatalog& Ca
     FShopRunState Next = State;
     FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
     int32 CopyIndex = INDEX_NONE;
-    int64 PollutionDelta = bInsideCustomer ? Catalog.Rules.PollutionOnSell : 0;
-    if (bInsideCustomer)
+    int64 PollutionDelta = bSecretBook ? Catalog.Rules.PollutionOnSell : 0;
+    if (bSecretBook)
     {
-        NormalizeSecretCopies(NextBook);
-        CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([](const FSecretBookCopy& Copy) { return Copy.bRead; });
-        if (CopyIndex == INDEX_NONE && !NextBook.SecretCopies.IsEmpty()) CopyIndex = 0;
-        if (CopyIndex == INDEX_NONE) return EShopActionResult::OutOfStock;
+        CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([](const FSecretBookCopy& Copy) { return Copy.bListedForSale && Copy.bRead; });
+        if (CopyIndex == INDEX_NONE)
+            CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([](const FSecretBookCopy& Copy) { return Copy.bListedForSale; });
+        if (CopyIndex == INDEX_NONE)
+        {
+            EconomyFail(Error, LOCTEXT("NoListedCopyForSale", "这本秘密书尚未上架表店，无法出售。"));
+            return EShopActionResult::OutOfStock;
+        }
         if (Catalog.Rules.ReturnedBookSellPollution < 0 || Next.LostSecretBooks.Num() == MAX_int32)
         {
             EconomyFail(Error, LOCTEXT("InvalidReturnedBook", "返架书污染配置无效或流失记录已满。"));
@@ -317,7 +377,7 @@ EShopActionResult ShopEconomy::Sell(FShopRunState& State, const FShopCatalog& Ca
         }
         Next.Enlighten = static_cast<int32>(NewEnlighten);
     }
-    if (bInsideCustomer)
+    if (bSecretBook)
     {
         NextBook.SecretCopies.RemoveAt(CopyIndex);
         RefreshBookCounts(NextBook);
@@ -336,7 +396,10 @@ bool ShopEconomy::HasMatchingStock(const FShopRunState& State, const FShopCatalo
     {
         if (Pair.Value.BookType != Type || Pair.Value.Layer != Layer) continue;
         const FBookRuntime* Runtime = State.Inventory.Find(Pair.Key);
-        if (Runtime && ValidInventory(*Runtime) && Runtime->Stock > 0) return true;
+        if (!Runtime || !ValidInventory(*Runtime) || Runtime->Stock <= 0) continue;
+        if (Type != EBookType::Secret) return true;
+        if (!IsSecretInventoryValid(*Runtime)) continue;
+        if (Runtime->SecretCopies.ContainsByPredicate([](const FSecretBookCopy& Copy) { return Copy.bListedForSale; })) return true;
     }
     return false;
 }

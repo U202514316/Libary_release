@@ -45,19 +45,26 @@ namespace
 bool ShopCustomers::Generate(FShopRunState& State, const FShopCatalog& Catalog, EBookLayer Layer, FText& Error)
 {
     Error = FText::GetEmpty();
-    const FRunRules& Rules = Catalog.Rules;
     if (Layer != EBookLayer::Table && Layer != EBookLayer::Inside)
-        return CustomerFail(Error, LOCTEXT("InvalidLayer", "顾客所属世界无效。"));
+        return CustomerFail(Error, LOCTEXT("InvalidTimeMapping", "顾客昼夜兼容参数无效。"));
+    return GenerateForTime(State, Catalog, Layer == EBookLayer::Inside, Error);
+}
+
+bool ShopCustomers::GenerateForTime(FShopRunState& State, const FShopCatalog& Catalog, bool bNight, FText& Error)
+{
+    Error = FText::GetEmpty();
+    const FRunRules& Rules = Catalog.Rules;
     if (Rules.CustomersMin < 0 || Rules.CustomersMax < Rules.CustomersMin || Rules.CustomersMax > 10000 || Rules.InsideCustomers < 0 || Rules.InsideCustomers > 10000 || Rules.DaysPerWeek <= 0)
         return CustomerFail(Error, LOCTEXT("InvalidCounts", "每日顾客数量或每周天数配置无效。"));
 
     // Generate with a copied stream; configuration failures must not consume randomness.
     FRandomStream Random = State.Random;
-    int64 Count = Layer == EBookLayer::Inside ? Rules.InsideCustomers : Random.RandRange(Rules.CustomersMin, Rules.CustomersMax);
-    if (Layer == EBookLayer::Table && State.Day > Rules.DaysPerWeek) Count += Rules.WeekTwoCustomerBonus;
+    // InsideCustomers is the serialized legacy name for the nighttime surface-shop count.
+    int64 Count = bNight ? Rules.InsideCustomers : Random.RandRange(Rules.CustomersMin, Rules.CustomersMax);
+    if (!bNight && State.Day > Rules.DaysPerWeek) Count += Rules.WeekTwoCustomerBonus;
     if (State.CustomerPenalty < 0) return CustomerFail(Error, LOCTEXT("InvalidCustomerPenalty", "永久顾客惩罚配置无效。"));
     Count -= State.CustomerPenalty;
-    if (Layer == EBookLayer::Inside)
+    if (bNight)
         for (const FShopModifier& Modifier : State.Modifiers)
             if (Modifier.Type == EShopEffectType::CustomerCountDelta && (Modifier.EndTurn < 0 || State.Turn < Modifier.EndTurn)) Count += Modifier.Amount;
     Count = FMath::Max<int64>(0, Count);
@@ -71,16 +78,12 @@ bool ShopCustomers::Generate(FShopRunState& State, const FShopCatalog& Catalog, 
     }
 
     TArray<EBookType> Needs;
-    if (Layer == EBookLayer::Inside) Needs.Add(EBookType::Secret);
-    else
+    for (EBookType Type : Rules.RandomNeedPool)
     {
-        for (EBookType Type : Rules.RandomNeedPool)
-        {
-            if (!ValidTableNeed(Type)) return CustomerFail(Error, LOCTEXT("InvalidNeed", "表世界顾客需求池只能包含小说、诗歌和历史。"));
-            Needs.Add(Type);
-        }
-        if (Needs.IsEmpty()) return CustomerFail(Error, LOCTEXT("EmptyNeeds", "表世界顾客需求池不能为空。"));
+        if (!ValidTableNeed(Type)) return CustomerFail(Error, LOCTEXT("InvalidNeed", "普通书需求池只能包含小说、诗歌和历史。"));
+        Needs.Add(Type);
     }
+    if (Needs.IsEmpty()) return CustomerFail(Error, LOCTEXT("EmptyNeeds", "普通书需求池不能为空。"));
 
     TArray<FName> TemplateIds;
     TMap<FName, float> PatienceById;
@@ -93,9 +96,8 @@ bool ShopCustomers::Generate(FShopRunState& State, const FShopCatalog& Catalog, 
         if (!std::isfinite(Data.SpawnWeight) || Data.SpawnWeight < 0.f || Data.MinPollution < 0 || Data.MaxPollution < Data.MinPollution)
             return CustomerFail(Error, LOCTEXT("InvalidTemplate", "顾客生成权重或污染范围无效。"));
         if (Data.SpawnWeight == 0.f || State.Pollution < Data.MinPollution || State.Pollution > Data.MaxPollution) continue;
-        // A role is independent from its requested book layer. Normal/Hurry may
-        // visit either shop; Secret/Polluted are exclusive to the inside shop.
-        if (Layer == EBookLayer::Table && Data.Kind != ECustomerKind::Normal && Data.Kind != ECustomerKind::Hurry) continue;
+        // All roles visit the surface shop; secret customers arrive only at night.
+        if (!bNight && Data.Kind == ECustomerKind::Secret) continue;
         if (Data.Kind == ECustomerKind::Polluted && State.Pollution < Rules.MediumThreshold) continue;
         if (!std::isfinite(Data.PatienceSeconds) || (Data.PatienceSeconds < 0.f && Data.PatienceSeconds != -1.f))
             return CustomerFail(Error, LOCTEXT("InvalidPatience", "顾客耐心配置无效。"));
@@ -105,7 +107,7 @@ bool ShopCustomers::Generate(FShopRunState& State, const FShopCatalog& Catalog, 
         TemplateIds.Add(Pair.Key);
         PatienceById.Add(Pair.Key, static_cast<float>(Patience));
     }
-    if (TemplateIds.IsEmpty()) return CustomerFail(Error, LOCTEXT("NoTemplates", "当前世界和污染程度没有可生成的顾客模板。"));
+    if (TemplateIds.IsEmpty()) return CustomerFail(Error, LOCTEXT("NoTemplates", "当前时段和污染程度没有可生成的顾客模板。"));
     TemplateIds.Sort(FNameLexicalLess());
     // Sum in the same stable order used by the weighted draw.
     for (FName Id : TemplateIds) TotalWeight += Catalog.Customers.FindChecked(Id).SpawnWeight;
@@ -127,8 +129,9 @@ bool ShopCustomers::Generate(FShopRunState& State, const FShopCatalog& Catalog, 
         const FCustomerData& Data = Catalog.Customers.FindChecked(Chosen);
         FCustomerRuntime Customer;
         Customer.TemplateId = Chosen;
-        Customer.NeedType = Needs[Random.RandRange(0, Needs.Num() - 1)];
-        Customer.NeedLayer = Layer;
+        // Layer remains the requested product's origin, never the customer's location.
+        Customer.NeedType = Data.Kind == ECustomerKind::Secret ? EBookType::Secret : Needs[Random.RandRange(0, Needs.Num() - 1)];
+        Customer.NeedLayer = Data.Kind == ECustomerKind::Secret ? EBookLayer::Inside : EBookLayer::Table;
         Customer.Kind = Data.Kind;
         Customer.bPolluted = Data.Kind == ECustomerKind::Polluted;
         Customer.bSecret = Data.Kind == ECustomerKind::Secret;

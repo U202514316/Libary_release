@@ -36,6 +36,9 @@ public:
     virtual FShopCommandResult RequestObserveCustomer_Implementation(int32 CustomerIndex) override;
     virtual FShopCommandResult RequestRejectCustomer_Implementation(int32 CustomerIndex) override;
     virtual FShopCommandResult RequestOpenInside_Implementation() override;
+    virtual FShopCommandResult RequestOpenTableShop_Implementation() override;
+    virtual FShopCommandResult RequestListSecretBook_Implementation(FName BookId) override;
+    virtual FShopCommandResult RequestUnlistSecretBook_Implementation(FName BookId) override;
     virtual FShopCommandResult RequestOpenRestock_Implementation() override;
     virtual FShopCommandResult RequestCollectSecret_Implementation(FName BookId) override;
     virtual FShopCommandResult RequestReadSecret_Implementation(FName BookId) override;
