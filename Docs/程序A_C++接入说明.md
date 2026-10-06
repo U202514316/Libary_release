@@ -1,5 +1,7 @@
 # 程序 A：C++ 逻辑与蓝图接入说明
 
+> **2026-10-06 上架交易修订：**当前范围为“里店秘密书上架到表店，夜间秘密顾客在表店购买，获得收入并增加污染”。里店不经营；阅读、收取、律令等旧能力保留但暂不接入本次简易界面。最新可操作入口、新增接口与阶段说明以 [README 当前玩法](../README.md#当前玩法秘密书上架到表书店2026-10-06-修订) 为准。旧 Word 说明和计划中的里店营业流程已过时，下文历史构建记录不代表本次验证结果。
+
 适用工程：`D:\unreal_project\Libary_release\Libary_Release.uproject`，引擎 UE 5.1，运行时模块 `Libary_Release`。本说明同步至 2026-10-06 本轮用户决定；构建、资产生成和回归的实际结果单列在文末。
 
 本轮已经写入经营、逐册秘密书、顾客、七条律令、结局判定以及 UI 接入用的 C++。Editor 和 Game 目标均完整构建成功；Release 八表已生成、独立进程校验通过并切换为项目配置；最终 29 项自动化测试全部成功。程序 B 已有 UI 资产，但其与这些新接口的连接和实际游玩仍待验收，不能据此宣称整套游戏可以直接玩。可下载 [Word 版完成情况与接口使用指南](程序A逻辑完成情况与接口使用指南.docx)，详细证据见文末。
@@ -112,11 +114,11 @@
 | --- | --- | --- |
 | `RequestNewRun` | 无参数 → `bool` | 仅 `Boot/End` 开始新一局。 |
 | `GetSnapshot` | 无参数 → `FRunSnapshot` | 获取只读状态副本。 |
-| `GetCustomers` | 无参数 → `FCustomerRuntime` 数组 | 当前世界的顾客队列；只操作第一位 `bServed=false` 的顾客。 |
+| `GetCustomers` | 无参数 → `FCustomerRuntime` 数组 | 表店当前营业批次的顾客队列；里店管理期间可保留暂停的夜间队列，不能显示为里店顾客。只操作第一位 `bServed=false` 的顾客。 |
 | `GetBookInfo` | `BookId` → `bool`，输出 `BookData`、`Stock` | 获取配置和已经拥有的库存；里书店可收取数量另见 `GetBookRuntime`。 |
-| `RequestBeginSell` | `CustomerIndex` → `EShopActionResult` | `Day/Inside` 选择队首；`Opened` 后进入 `Sell/InsideSell`。 |
+| `RequestBeginSell` | `CustomerIndex` → `EShopActionResult` | `Day/NightShop` 选择队首；`Opened` 后进入 `Sell/NightSell`，都在表店。 |
 | `RequestSell` | `BookId` → `EShopActionResult` | 在选书阶段提交书籍。`Sold` 才有收入、扣库存；错误结果要按枚举处理。 |
-| `RequestCancelSell` | 无参数 → `bool` | 退出选书回到 `Day/Inside`，不算完成该顾客。 |
+| `RequestCancelSell` | 无参数 → `bool` | 退出选书回到 `Day/NightShop`，不算完成该顾客。 |
 | `RequestEndDay` | 无参数 → `bool` | 从 `Day` 到 `DayEnd`；是否允许提前关门由配置控制。 |
 | `RequestContinue` | 无参数 → `bool` | 兼容“继续”按钮：日结后进入黄昏选择；夜间活动后结算；夜结后进入集市或次日；集市中则关闭集市。 |
 | `RequestRestock` | `BookId` → `bool` | 仅 `Restock` 购买一本表世界书，立即扣成本和记支出。 |
@@ -134,11 +136,14 @@
 | --- | --- | --- |
 | `RequestObserveCustomer` | `CustomerIndex` | 营业或选书时观察队首，标记已观察并回调 `ShowObserveResult`。 |
 | `RequestRejectCustomer` | `CustomerIndex` | 营业或选书时拒绝队首，让队列前进。 |
-| `RequestOpenInside` | 无 | `DuskChoice` 选择本晚进入里书店。 |
+| `RequestOpenInside` | 无 | `DuskChoice` 选择里店管理；或当晚已选择里店时从 `NightShop` 返回。没有里店顾客。 |
+| `RequestOpenTableShop` | 无 | 从 `Inside/Restock` 到 `NightShop`，同夜只生成一次表店顾客队列。 |
+| `RequestListSecretBook` | `BookId` | `Inside` 上架一册秘密书，不收费、不增污、不增加总库存。 |
+| `RequestUnlistSecretBook` | `BookId` | `Inside` 撤回一册上架书，保留副本标记。 |
 | `RequestOpenRestock` | 无 | `DuskChoice` 选择本晚采购表世界书籍。 |
 | `RequestCollectSecret` | `BookId` | `Inside` 消耗灵能，从有限的可收取数量中取得一本秘密书。 |
 | `RequestReadSecret` | `BookId` | `Inside` 阅读一册尚未读过的秘密书，结算收益与该副本的额外污染；历史本轮关闭。 |
-| `RequestEndNight` | 无 | `Inside/Restock` 完成本晚结算；选书期间需先取消选书。 |
+| `RequestEndNight` | 无 | `Inside/Restock/NightShop` 完成本晚结算；选书期间需先取消选书。 |
 | `RequestPurify` | `Amount: int32` | 轻度污染的 `Calm` 面板，用等量灵能降低污染；数量须为正且不超过现有污染、灵能。 |
 | `RequestEnactDecree` | `DecreeId` | `Calm` 颁布本次候选中的可用律令，检查成本、生效和冷却状态。 |
 | `RequestSkipDecree` | 无 | 关闭当前 `Calm` 请求并恢复原阶段。 |
@@ -221,15 +226,15 @@ Boot --RequestNewRun--> Day <--> Sell
 | 灵能 | 初始 0，上限 100。秘密书已在开局拥有，可先阅读获得灵能。收取新书默认每本消耗 12 灵能。 |
 | 初始库存 | 所有书的 `InitialStock` 都是已拥有库存。旧 `InitialOwnedStock` 仅为兼容保留，不再额外相加。初始秘密书每册已封存、未读。 |
 | 每晚收书 | `CollectOfferPerNight` 与已拥有量分开；Release 每种秘密书每晚提供 1 册，进入里店时刷新，当晚收取后减少。新收取副本封存且未读。 |
-| 每册状态 | `SecretCopies` 分别记录 `bRead/bSealed/bAltered/bPolluted`；`Stock/ReadCopies` 是其汇总。封存不妨碍正常阅读，每册默认只读一次；售卖优先移除已读副本。 |
+| 每册状态 | `SecretCopies` 记录 `bRead/bSealed/bAltered/bPolluted/bListedForSale`；上架不改变其他标记。`Stock/ReadCopies/ListedCopies/StoredCopies` 是汇总。售卖仅选择已上架副本，在其中优先移除已读副本。 |
 | 基础收益和污染 | 阅读使用该书 `PsychicYield/PollutionYield`；值为 -1 才回退至全局阅读值。收书默认污染 +5，秘密书售卖默认 +10，分别使用全局配置，不被阅读污染覆盖。 |
 | 进步书启蒙 | `book_novel_03`、`book_history_02`、`book_history_03` 每次成功售出独立以 50% 概率获得启蒙 +2，失败交易不抽奖、不加启蒙。其他书默认没有该售卖奖励。 |
 | 额外污染 | 被篡改的副本阅读额外 +2；潮汐返架的污染副本阅读或售卖额外 +3，可与基础污染相加。 |
-| 收入与灵能倍率 | `IncomeMultiplier` 与当晚 `NightIncomeMultiplier` 相乘，只作用于里店售书收入，最终向下取整；灵能收益也先合并倍率再取整。不会回扣已经取得的收入。 |
-| 表店顾客 | 只出现 `Normal/Hurry`，需求为表店的小说、诗集或历史；白天基础客流 3～5，第二周起增加 1。 |
-| 里店顾客 | 四种角色均可出现，权重为普通 5、急躁 3、秘密 2、污染 2；污染顾客仍要求污染至少 61。每晚基础客流 4，不保证每类各一人。所有角色的里店需求都是 `Inside/Secret`，角色类型与需求类型分开。 |
+| 收入与灵能倍率 | `IncomeMultiplier` 作用于秘密书收益；`NightIncomeMultiplier` 作用于夜间表店所有成交。秘密书夜售合并两者后向下取整；不回扣已取得收入。 |
+| 白天表店顾客 | 出现 `Normal/Hurry`，以及符合污染门槛的 `Polluted`；需求为小说、诗集或历史。秘密顾客不在白天生成。白天基础客流3～5，第二周起增加1。 |
+| 夜间表店顾客 | 四种角色均可出现，权重普通5、急躁3、秘密2、污染2；污染顾客仍要求至少61。每晚基础客流4，不保证每类各一人。只有Secret需求为秘密书，其余角色需求普通书。所有人都在表店；里店没有营业顾客。 |
 | 耐心 | 初始显示完整耐心（普通 30 秒、急躁 15 秒、秘密 30 秒、污染 20 秒）；当前污染达到 61 后，所有顾客按 `DeltaSeconds × 1.3` 消耗。污染降低后恢复正常速率，旧的生成时乘 0.7 规则停用。只有队首计时。 |
-| 客流代价 | 闭门律的 -1 只作用当晚里店；若队列已生成，会减少一个未服务、非当前选书顾客。无名律的永久客流惩罚作用白天和里店。 |
+| 客流代价 | 闭门律的-1作用当晚表店；队列已生成时减少一个未服务、非当前选书且非假顾客。尚未生成时在夜间生成时扣减；同夜往返不会重扣。无名律永久客流惩罚作用白天和夜间表店。 |
 
 污染阶段阈值为轻度 31、中度 61、重度 86，终止上限 100。一次命令中污染达到终止上限会留下标记，即便后续减污也不能撤销已经触发的终止条件。增污统一经过 `ShopEffects::ChangePollution`，因此“下一次污染 +5”等效果不会遗漏正常业务入口。
 
@@ -245,8 +250,8 @@ Boot --RequestNewRun--> Day <--> Sell
 
 | 行名 / 律令 | 生效与代价 | 漏洞和本轮细则 |
 | --- | --- | --- |
-| `bronze_01` 静阅律 | 灵能 8、污染 -15，当晚里店后续售书收入 ×0.8。 | 到期后挂起一次“下次正向污染 +5”。零增量或减污不消费它，下一次正向增污只消费一次。 |
-| `bronze_02` 闭门律 | 灵能 8，阻止轻度扩散；当晚里店顾客 -1。 | 轻度污染夜结时，若有未封存秘密书副本或尚未收取的书，基础扩散为 +2；闭门生效时阻止该项。漏洞产生假顾客，只进入里店队列；白天触发则等待后续进入里店。假顾客不能交易，可观察或拒绝；轮到队首计时时每秒污染 +1，单个最多 +5，拒绝或超时后停止。 |
+| `bronze_01` 静阅律 | 灵能8、污染-15，当晚表店后续售书收入×0.8。 | 到期挂起一次“下次正向污染+5”，零增量或减污不消费。旧律令能力保留，本次简易界面暂不接入。 |
+| `bronze_02` 闭门律 | 灵能8，阻止轻度扩散；当晚表店顾客-1。 | 轻度扩散旧规则保留。漏洞假顾客仅在表店营业/选书时加入队列；在管理页触发则等待回表店。假顾客不可交易，可观察/拒绝，等待污染仍受每名上限约束。 |
 | `bronze_03` 燃烛律 | 灵能 8、污染 -10，持续期间自然衰减 ×2、阅读灵能收益 ×0.8。 | 漏洞跳过一次夜间自然衰减；若在夜结开始时到期，则影响当次夜结。不是直接额外污染 +5。 |
 | `silver_01` 闭架律 | 灵能 18、污染 -30，随机一册已拥有秘密书被篡改，之后阅读额外污染 +2。 | 漏洞只从仍在库存且同时处于篡改、封存状态的副本中解封一册，并独立污染 +10；对应副本已售出、被焚毁或没有符合条件的副本时不解封其他书，+10 仍照常执行。篡改与封存按册记录，阅读仍允许读取封存本。 |
 | `silver_02` 守夜律 | 灵能 18，持续期间自然衰减 ×2；每晚金钱 -30 为本局永久代价。 | 漏洞后每夜污染 +3 为本局永久。相同律令来源、相同永久效果重复出现不会叠加多份。 |

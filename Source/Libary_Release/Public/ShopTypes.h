@@ -9,7 +9,8 @@ enum class EBookType : uint8 { Novel, Poem, History, Secret };
 UENUM(BlueprintType)
 enum class EBookLayer : uint8 { Table, Inside };
 UENUM(BlueprintType)
-enum class EGamePhase : uint8 { Boot, Day, Sell, DayEnd, DuskChoice, Restock, Inside, InsideSell, Calm, History, NightEnd, Market, End };
+// Keep serialized values stable. InsideSell is a retired phase; trading only happens at the front shop.
+enum class EGamePhase : uint8 { Boot, Day, Sell, DayEnd, DuskChoice, Restock, Inside, InsideSell, Calm, History, NightEnd, Market, End, NightShop, NightSell };
 UENUM(BlueprintType)
 enum class EShopActionResult : uint8 { Rejected, Opened, Sold, WrongBook, NoMatch, OutOfStock, Success, Cancelled, InvalidPhase, InvalidId, InsufficientMoney, InsufficientPsychic, AlreadyDone, Expired, Unavailable, InvalidConfig };
 UENUM(BlueprintType)
@@ -52,6 +53,7 @@ struct LIBARY_RELEASE_API FBookData : public FTableRowBase
     GENERATED_BODY()
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FText DisplayName;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) EBookType BookType = EBookType::Novel;
+    // Book origin, not its current shelf. Secret books keep Inside after being listed at the front shop.
     UPROPERTY(EditAnywhere, BlueprintReadWrite) EBookLayer Layer = EBookLayer::Table;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Cost = 10;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Price = 20;
@@ -90,6 +92,7 @@ struct LIBARY_RELEASE_API FCustomerRuntime
     GENERATED_BODY()
     UPROPERTY(BlueprintReadOnly) FName TemplateId;
     UPROPERTY(BlueprintReadOnly) EBookType NeedType = EBookType::Novel;
+    // Requested book origin. All customers are physically at the front shop.
     UPROPERTY(BlueprintReadOnly) EBookLayer NeedLayer = EBookLayer::Table;
     UPROPERTY(BlueprintReadOnly) ECustomerKind Kind = ECustomerKind::Normal;
     UPROPERTY(BlueprintReadOnly) bool bServed = false;
@@ -112,6 +115,8 @@ struct LIBARY_RELEASE_API FSecretBookCopy
     UPROPERTY(BlueprintReadOnly) bool bSealed = true;
     UPROPERTY(BlueprintReadOnly) bool bAltered = false;
     UPROPERTY(BlueprintReadOnly) bool bPolluted = false;
+    // Physical listing state; moving a copy never changes its read/seal/pollution flags.
+    UPROPERTY(BlueprintReadOnly) bool bListedForSale = false;
 };
 
 USTRUCT(BlueprintType)
@@ -123,6 +128,9 @@ struct LIBARY_RELEASE_API FBookRuntime
     UPROPERTY(BlueprintReadOnly) int32 ReadCopies = 0;
     UPROPERTY(BlueprintReadOnly) bool bAltered = false;
     UPROPERTY(BlueprintReadOnly) TArray<FSecretBookCopy> SecretCopies;
+    // Derived secret-copy counts. Stock remains the total owned count; ordinary books use Stock.
+    UPROPERTY(BlueprintReadOnly) int32 ListedCopies = 0;
+    UPROPERTY(BlueprintReadOnly) int32 StoredCopies = 0;
 };
 
 USTRUCT(BlueprintType)
@@ -138,7 +146,8 @@ struct LIBARY_RELEASE_API FRunRules : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 CustomersMin = 3;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 CustomersMax = 5;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 WeekTwoCustomerBonus = 1;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 InsideCustomers = 2;
+    // Legacy serialized name: number of NIGHT customers at the FRONT shop, never inside-store visitors.
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(DisplayName="Night Table Customers")) int32 InsideCustomers = 2;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DaysPerWeek = 7;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) TArray<EBookType> RandomNeedPool = { EBookType::Novel, EBookType::Poem, EBookType::History };
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float PatienceNormal = 30.f;
@@ -379,6 +388,7 @@ struct FShopRunState
     bool bGoldDuringHeavyGrace = false;
     bool bPollutionLimitReached = false;
     bool bPendingCalm = false;
+    bool bNightCustomersGenerated = false;
     EGamePhase Phase = EGamePhase::Boot;
     EGamePhase ResumePhase = EGamePhase::Boot;
     ENightChoice NightChoice = ENightChoice::None;

@@ -60,6 +60,8 @@ bool FReleaseOwnedStart::RunTest(const FString&)
     TestTrue(TEXT("Read owned runtime"), F.Run->GetBookRuntime(TEXT("book_secret_01"), Book));
     TestEqual(TEXT("Initial book is already owned"), Book.Stock, 1);
     TestEqual(TEXT("Owned secret represented by one copy"), Book.SecretCopies.Num(), 1);
+    TestEqual(TEXT("Initially owned secret is not listed"), Book.ListedCopies, 0);
+    TestEqual(TEXT("Initially owned secret remains stored"), Book.StoredCopies, 1);
     TestTrue(TEXT("Zero psychic can read initially owned book"), F.Run->RequestReadSecret_Implementation(TEXT("book_secret_01")).bSucceeded);
     TestEqual(TEXT("Earn eight psychic"), F.Snapshot().Psychic, 8);
     TestTrue(TEXT("History remains disabled"), F.Snapshot().PendingEventId.IsNone());
@@ -85,11 +87,14 @@ bool FReleaseStageAndFallback::RunTest(const FString&)
     TestEqual(TEXT("Emergency charges configured money"), F.Snapshot().Money, MoneyBefore - F.Rules.EmergencyMoneyCost);
     TestEqual(TEXT("Emergency does not consume a turn"), F.Snapshot().Turn, 0);
     TestTrue(TEXT("Enter inside"), F.Inside());
+    if (!TestTrue(TEXT("Generate a real night storefront queue"), F.Run->RequestOpenTableShop_Implementation().bSucceeded)) return false;
+    if (!TestTrue(TEXT("Return to management before reading"), F.Run->RequestOpenInside_Implementation().bSucceeded)) return false;
     TestTrue(TEXT("Read first book to 60"), F.Run->RequestReadSecret_Implementation(TEXT("book_secret_01")).bSucceeded);
     TestTrue(TEXT("Read second book across Medium"), F.Run->RequestReadSecret_Implementation(TEXT("book_secret_02")).bSucceeded);
     TestEqual(TEXT("One upward crossing advances exactly once"), F.Snapshot().Turn, 1);
     TestEqual(TEXT("Crossing opens calm"), F.Snapshot().Phase, EGamePhase::Calm);
     const auto Before = F.Run->GetCustomers_Implementation();
+    if (!TestTrue(TEXT("Modal pause is exercised against an existing queue"), Before.Num() > 0)) return false;
     F.Run->Tick(10.f);
     const auto After = F.Run->GetCustomers_Implementation();
     if (Before.Num() && After.Num()) TestEqual(TEXT("Modal pauses patience"), After[0].Patience, Before[0].Patience);
@@ -112,9 +117,22 @@ bool FReleaseThirtyFiveDays::RunTest(const FString&)
         if (Day == 1)
         {
             TestTrue(TEXT("Actual gameplay reads an owned book"), F.Run->RequestReadSecret_Implementation(TEXT("book_secret_01")).bSucceeded);
+            if (!TestTrue(TEXT("List owned secret in storefront"), F.Run->RequestListSecretBook_Implementation(TEXT("book_secret_01")).bSucceeded)) return false;
+            if (!TestTrue(TEXT("Open night storefront"), F.Run->RequestOpenTableShop_Implementation().bSucceeded)) return false;
             const int32 Index = 0;
-            TestEqual(TEXT("Open inside sale"), F.Run->RequestBeginSell_Implementation(Index), EShopActionResult::Opened);
-            TestEqual(TEXT("Sell to a nighttime customer"), F.Run->RequestSell_Implementation(TEXT("book_secret_01")), EShopActionResult::Sold);
+            const auto Queue = F.Run->GetCustomers_Implementation();
+            if (!TestTrue(TEXT("Actual release data generates nighttime visitors"), Queue.IsValidIndex(Index))) return false;
+            FName MatchingBook;
+            for (const FName Id : F.Run->GetBookIds())
+            {
+                FBookData Data; int32 Stock = 0; FBookRuntime Runtime;
+                if (F.Run->GetBookInfo_Implementation(Id, Data, Stock) && F.Run->GetBookRuntime(Id, Runtime) &&
+                    Stock > 0 && Data.BookType == Queue[Index].NeedType && Data.Layer == Queue[Index].NeedLayer &&
+                    (Data.Layer != EBookLayer::Inside || Runtime.ListedCopies > 0)) { MatchingBook = Id; break; }
+            }
+            if (!TestFalse(TEXT("First visitor has a matching stocked/listed product"), MatchingBook.IsNone())) return false;
+            TestEqual(TEXT("Open nighttime storefront sale"), F.Run->RequestBeginSell_Implementation(Index), EShopActionResult::Opened);
+            TestEqual(TEXT("Sell the product requested by the nighttime visitor"), F.Run->RequestSell_Implementation(MatchingBook), EShopActionResult::Sold);
         }
         if (!F.ClearCalm()) return false;
         if (!TestTrue(TEXT("Exactly one night settlement"), F.Run->RequestEndNight_Implementation().bSucceeded)) return false;
@@ -148,20 +166,20 @@ bool FReleaseFakeCustomer::RunTest(const FString&)
         if (!TestTrue(TEXT("Settle one point"), F.Run->RequestEndNight_Implementation().bSucceeded)) return false;
         if (!F.ClearCalm() || !F.Run->RequestNextDay_Implementation()) return false;
     }
-    for (const FCustomerRuntime& Customer : F.Run->GetCustomers_Implementation())
-        TestFalse(TEXT("Pending fake never appears in the surface shop"), Customer.bFake);
-    if (!TestTrue(TEXT("Enter next inside shop"), F.Inside())) return false;
     const auto Customers = F.Run->GetCustomers_Implementation();
-    TestEqual(TEXT("One fake joins the regular inside queue"), Customers.Num(), F.Rules.InsideCustomers + 1);
-    if (!TestTrue(TEXT("Fake is inserted after current customer"), Customers.IsValidIndex(1) && Customers[1].bFake)) return false;
+    int32 FakeIndex = INDEX_NONE, FakeCount = 0;
+    for (int32 Index = 0; Index < Customers.Num(); ++Index)
+        if (Customers[Index].bFake) { FakeIndex = Index; ++FakeCount; }
+    TestEqual(TEXT("Pending fake joins the daytime storefront exactly once"), FakeCount, 1);
+    if (!TestTrue(TEXT("Fake is inserted after current customer"), FakeIndex == 1)) return false;
     TestTrue(TEXT("Resolve regular queue head"), F.Run->RequestRejectCustomer_Implementation(0).bSucceeded);
-    TestEqual(TEXT("Fake cannot buy a book"), F.Run->RequestBeginSell_Implementation(1), EShopActionResult::Unavailable);
-    TestTrue(TEXT("Player can inspect fake"), F.Run->RequestObserveCustomer_Implementation(1).bSucceeded);
-    TestTrue(TEXT("Observation is recorded"), F.Run->GetCustomers_Implementation()[1].bObserved);
+    TestEqual(TEXT("Fake cannot buy a book"), F.Run->RequestBeginSell_Implementation(FakeIndex), EShopActionResult::Unavailable);
+    TestTrue(TEXT("Player can inspect fake"), F.Run->RequestObserveCustomer_Implementation(FakeIndex).bSucceeded);
+    TestTrue(TEXT("Observation is recorded"), F.Run->GetCustomers_Implementation()[FakeIndex].bObserved);
     const int32 PollutionBefore = F.Snapshot().Pollution;
     F.Run->Tick(1.1f);
     TestEqual(TEXT("Waiting one second adds configured pollution"), F.Snapshot().Pollution, PollutionBefore + F.Rules.FakeCustomerPollutionPerSecond);
-    TestTrue(TEXT("Player can dismiss fake"), F.Run->RequestRejectCustomer_Implementation(1).bSucceeded);
+    TestTrue(TEXT("Player can dismiss fake"), F.Run->RequestRejectCustomer_Implementation(FakeIndex).bSucceeded);
     F.Run->Tick(2.f);
     TestEqual(TEXT("Dismissed fake stops emitting pollution"), F.Snapshot().Pollution, PollutionBefore + F.Rules.FakeCustomerPollutionPerSecond);
     return true;
@@ -189,6 +207,8 @@ bool FReleaseSettingsInitialization::RunTest(const FString&)
     FBookRuntime Secret;
     TestTrue(TEXT("Configured owned secret is available"), Run->GetBookRuntime(TEXT("book_secret_01"), Secret));
     TestEqual(TEXT("Configured initial secret is already owned"), Secret.Stock, 1);
+    TestEqual(TEXT("Configured initial secret is unlisted"), Secret.ListedCopies, 0);
+    TestEqual(TEXT("Configured initial secret is stored"), Secret.StoredCopies, 1);
     for (EShopEnding Ending : { EShopEnding::Closed, EShopEnding::PollutionReleased, EShopEnding::Returned, EShopEnding::Cycle })
     {
         FEndingData Data;
