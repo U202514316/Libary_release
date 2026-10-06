@@ -1,74 +1,85 @@
 # 程序 A：C++ 逻辑与蓝图接入说明
 
-适用工程：`D:\unreal_project\Libary_release\Libary_Release.uproject`，引擎 UE 5.1，运行时模块 `Libary_Release`。
+适用工程：`D:\unreal_project\Libary_release\Libary_Release.uproject`，引擎 UE 5.1，运行时模块 `Libary_Release`。本说明同步至 2026-10-06 本轮用户决定；构建、资产生成和回归的实际结果单列在文末。
 
-当前交付是经营逻辑、数据结构、蓝图接口和 Prototype 数据表。程序 B 现有的界面还没有接入这些接口，因此不能把本次交付理解为已经可以直接游玩的完整游戏。下面说明如何接线，以及哪些内容仍需策划确认。
+本轮已经写入经营、逐册秘密书、顾客、七条律令、结局判定以及 UI 接入用的 C++。Release 数据生成工具依据已有调参表生成 16 本书、4 类顾客、7 条启用律令和 4 个结局。程序 B 已有 UI 资产，但其与这些新接口的连接和实际游玩仍待验收，不能据此宣称整套游戏可以直接玩。
 
-本次验证记录（2026-10-05）：UE 5.1.1 的 `Libary_ReleaseEditor Win64 Development` 和 `Libary_Release Win64 Development` 均编译成功；14 项 `Bookstore.ProgramA` 自动化测试全部通过，0 失败，测试进程退出码为 0。七张 Prototype 表生成后，在另一个进程中从磁盘重新加载并通过配置校验。报告位于 `Saved/Automation/ProgramA_Final/index.json`，日志位于 `Saved/Logs/ProgramA_Final.log`、`ShopBootstrapVerify.log` 和 `ProgramA_GameBuild.log`。此记录覆盖 C++ 业务与数据加载，未将程序 B 的现有界面接线、PIE 人工游玩或 Cook/完整打包列为已完成。
+## 1. 哪些已写成 C++，哪些自动生成，哪些要在 UE 中连接
 
-## 1. 文件分别负责什么
+| 工作 | 当前范围 | 接入时要做什么 |
+| --- | --- | --- |
+| 经营、库存、随机顾客、污染、律令与结局 | C++ 已实现，规则由数据驱动；实际验证见文末 | UI 发命令并显示服务返回的状态，不再自行结算一遍。 |
+| 原生类、接口、结构、枚举 | 编译时由 UE 反射系统注册  | 不用手建同名蓝图接口、结构或枚举。 |
+| Release 八张 DataTable | `ShopReleaseData` 工具负责自动创建；具体落盘和重新加载结果见文末 | 在项目设置核对八个软引用；日常改表使用编辑器，不重复运行创建命令覆盖。 |
+| `ShopPlayerController` / `ShopGameMode` | C++ 类已写入，包含根控件生命周期和首次开局 | 手工派生两个蓝图、选根 WBP，并在需要的关卡指定 GameMode。工具不会自动改用户地图。 |
+| 根 UI、按钮、库存列表、顾客、镇定与结局面板 | 现有程序 B 资产可继续使用，新接口接入待验收 | 根 WBP 实现原生 `ShopView`，将回调连到现有显示逻辑，将按钮连到服务请求。 |
+| 历史事件 | 通用队列与见证接口保留；按用户决定暂缓接入 | Release 的 `bEnableHistory=false`，事件表为空，本轮不用制作或接通历史面板流程。 |
+| 集市与夜枭 | 通用接口保留；正式内容与界面属于原程序 B 范围 | 本轮不宣称商品、110 条台词或 UI 验收完成；集市默认关闭。 |
+| P2 存档 / 读档 | 尚未实现，本轮未明确纳入 | 当前运行状态只在 GameInstance 生命周期内保存，退出游戏不会自动存档。 |
 
 运行时源文件位于 `Source/Libary_Release`，公开声明在 `Public`，实现在 `Private`。
 
 | 文件 | 职责 |
 | --- | --- |
-| `ShopTypes.h` | 原生枚举、DataTable 行结构、运行快照、命令结果与内部状态。 |
-| `ShopService.h` | UI 向逻辑发请求的原生接口，包括原有 11 个接口和新增命令。 |
-| `ShopView.h` | 逻辑向 UI 回传刷新、弹窗、顾客处理结果的原生接口。 |
-| `ShopRunSubsystem.h/.cpp` | 唯一状态入口，管理阶段、日夜结算、结局、事务提交和 UI 通知。 |
-| `ShopBlueprintLibrary.h/.cpp` | 提供蓝图节点 `Get Shop Service`、书籍类型显示文本。 |
-| `ShopEconomy.h/.cpp` | 金钱、库存、补货、收书、逐册阅读、售书和房租结算。 |
-| `ShopCustomers.h/.cpp` | 随机顾客、需求、队首操作、耐心倒计时和需求文本。 |
-| `ShopDecrees.h/.cpp` | 污染阶段、律令候选、生效与漏洞；`ShopEffects` 执行结构化效果。 |
-| `ShopStory.h/.cpp` | 历史事件队列、见证、每周集市和夜枭台词。 |
-| `ShopValidation.h/.cpp` | 开局前检查数据类型、数值范围、关联 ID 与未支持的效果。 |
-| `ShopSettings.h/.cpp` | Project Settings → Game → Bookstore 中的七张数据表软引用和随机种子。 |
-| `Private/Tests/ShopRunTests.cpp` | `Bookstore.ProgramA` 自动化测试入口。 |
+| `ShopTypes.h` | 原生枚举、八种 DataTable 行结构、每册秘密书状态、运行快照与命令结果。 |
+| `ShopService.h` / `ShopView.h` | UI 发请求与逻辑回传事件的原生接口。 |
+| `ShopRunSubsystem.h/.cpp` | 唯一状态入口，阶段、日夜结算、结局、事务提交、计时和 UI 通知。 |
+| `ShopPlayerController.h/.cpp` | 创建根 Widget、显示鼠标、设置 UI 输入、注册和移除视图。 |
+| `ShopGameMode.h/.cpp` | 选择 C++ PlayerController；仅首次 `Boot` 自动开局。 |
+| `ShopBlueprintLibrary.h/.cpp` | 蓝图 `Get Shop Service`、书籍类型显示文本。 |
+| `ShopEconomy.h/.cpp` | 金钱、逐册库存、补货、收书、阅读、售书、启蒙概率与房租。 |
+| `ShopCustomers.h/.cpp` | 顾客权重、分店资格、需求、队首操作及运行时耐心衰减。 |
+| `ShopDecrees.h/.cpp` | 阶段、候选、可支付检查、持续期、漏洞、冷却和 `ShopEffects`。 |
+| `ShopStory.h/.cpp` | 历史、集市、夜枭通用逻辑；内容接入范围见第 9 节。 |
+| `ShopValidation.h/.cpp` | 校验行结构、范围、关联 ID、效果和结局配置。 |
+| `ShopSettings.h/.cpp` | Project Settings → Game → Bookstore 的八张表软引用和随机种子。 |
+| `Private/Tests/Shop*Tests.cpp` | `Bookstore.ProgramA` 自动化测试及本轮规则回归用例。 |
 
-`Source/Libary_ReleaseEditor` 是编辑器专用模块，其中 `ShopBootstrapCommandlet` 负责创建或只读检查 Prototype 表。原来的 `CppBridgeLibrary` 和 Hello 示例继续保留。
+`Source/Libary_ReleaseEditor` 仅在编辑器目标使用：`ShopReleaseDataCommandlet` 生成本轮 Release 表；旧 `ShopBootstrapCommandlet` 保留 Prototype 检查入口。原有 `CppBridgeLibrary`、Hello 示例和 Prototype 备用资产继续保留。
 
-## 2. 先确认原生类型和七张表
+## 2. 原生类型与 Release 八张表
 
-完成 C++ 编译后重新打开编辑器。内容浏览器开启 **Show C++ Classes / 显示 C++ 类**，可在 `C++ Classes / Libary_Release` 下找到原生类。编译步骤仍见 [README](../README.md)。
+完成 C++ 编译后重新打开编辑器，编译入口见 [README](../README.md)。UE 5.1 中打开 **Content Browser / 内容浏览器**，点右上角 **Settings / 设置**，勾选 **Show C++ Classes / 显示 C++ 类**；左侧展开 **C++ Classes → Libary_Release**。如果使用底部 Content Drawer，也可在其设置中打开同一选项。
 
-`ShopRunSubsystem`、`ShopService`、`ShopView` 以及 `BookData`、`RunRules` 等结构和枚举均由 C++ 定义。不要再手建同名蓝图接口、结构体或枚举；名称相似的蓝图结构也不能代替 DataTable 要求的原生行结构。原生结构和枚举不一定各自显示为普通 `.uasset`，可在变量类型、节点引脚和 DataTable 行结构选择器中查找它们。
+`ShopRunSubsystem`、`ShopService`、`ShopView` 及结构、枚举均来自 C++。原生结构和枚举不一定显示成普通 `.uasset`；在变量类型、节点引脚和 DataTable 行结构选择器中查找即可。不要另建同名蓝图类型替代它们。
 
-Prototype 资产位于内容浏览器的 `Content / ProgramA / Prototype / Data`，磁盘位置为 `Content/ProgramA/Prototype/Data`。
+本轮生成目标是内容浏览器 **Content / ProgramA / Release / Data**，磁盘目录为 `Content/ProgramA/Release/Data`。生成完成后，项目设置的八个引用切换至下表；备用 `Prototype` 不覆盖、不删除。
 
-| Bookstore 设置项 | 资产路径 | 原生行结构 |
+| Bookstore 设置项 | 资产路径 | 原生行结构 / 本轮内容 |
 | --- | --- | --- |
-| Books | `/Game/ProgramA/Prototype/Data/DT_Books` | `FBookData` / BookData |
-| Customers | `/Game/ProgramA/Prototype/Data/DT_Customers` | `FCustomerData` / CustomerData |
-| Run Rules | `/Game/ProgramA/Prototype/Data/DT_RunRules` | `FRunRules` / RunRules |
-| Decrees | `/Game/ProgramA/Prototype/Data/DT_Decrees` | `FDecreeData` / DecreeData |
-| Events | `/Game/ProgramA/Prototype/Data/DT_Events` | `FEventData` / EventData |
-| Market Items | `/Game/ProgramA/Prototype/Data/DT_MarketItems` | `FMarketItemData` / MarketItemData |
-| Owl Lines | `/Game/ProgramA/Prototype/Data/DT_Owl` | `FOwlLine` / OwlLine |
+| Books | `/Game/ProgramA/Release/Data/DT_Books` | `FBookData`；16 行。 |
+| Customers | `/Game/ProgramA/Release/Data/DT_Customers` | `FCustomerData`；4 行。 |
+| Run Rules | `/Game/ProgramA/Release/Data/DT_RunRules` | `FRunRules`；`Default` 行。 |
+| Decrees | `/Game/ProgramA/Release/Data/DT_Decrees` | `FDecreeData`；7 行，均启用。 |
+| Events | `/Game/ProgramA/Release/Data/DT_Events` | `FEventData`；空，历史暂缓。 |
+| Market Items | `/Game/ProgramA/Release/Data/DT_MarketItems` | `FMarketItemData`；空，保留原程序 B 接入范围。 |
+| Owl Lines | `/Game/ProgramA/Release/Data/DT_Owl` | `FOwlLine`；空，保留原程序 B 接入范围。 |
+| Endings | `/Game/ProgramA/Release/Data/DT_Endings` | `FEndingData`；4 行。 |
 
-在 **Edit → Project Settings → Game → Bookstore** 核对这七个引用。软引用的完整对象路径会额外带资产名，例如 `/Game/ProgramA/Prototype/Data/DT_Books.DT_Books`；在资产选择器中直接选择对应表即可。
+打开 **Edit → Project Settings → Game → Bookstore**，核对八个资产选择框。完整软引用还带对象名，例如 `/Game/ProgramA/Release/Data/DT_Books.DT_Books`。项目配置使用 `Config/DefaultGame.ini`；Cook 目录也应包含 `/Game/ProgramA/Release/Data`。不要只改显示文字却留下旧表引用。
 
-这些引用同时写入了 `Config/DefaultGame.ini`。Prototype 数据目录也加入了打包时必须 Cook 的目录，避免仅由设置加载的表被遗漏；以后更换为正式数据目录时，应同步检查对应 Cook 配置。
+`DT_RunRules` 的行名必须是 `Default`。请求中的 `BookId/DecreeId` 使用 **DataTable 行名**，不是中文显示名，例如 `book_novel`。有独立 `Id` 字段的表可留空，或填同一个行名。已经生成的表不需要重建；`ShopReleaseData` 有拒绝覆盖保护，后续只读检查使用 `-run=ShopReleaseData -VerifyOnly`。
 
-`DT_RunRules` 必须保留名为 `Default` 的行。书籍、律令、事件等请求中的 ID 使用 **DataTable 行名**，不是中文显示名。例如第一本小说的 `BookId` 是 `book_novel`。含有单独 `Id` 字段的表可让它留空，或填与行名相同的值；不能填另一个 ID。
+## 3. UE 5.1 中的具体 UI 接入步骤
 
-七张表已有 Prototype 路径，日常接入不需要再次执行创建命令。以后检查现有表使用 `-run=ShopBootstrap -VerifyOnly`；不要用重新创建或覆盖示例表的方式保存策划修改。
+`UShopRunSubsystem` 继承 `UGameInstanceSubsystem`，UE 随 GameInstance 自动创建它。无需更换旧 GameInstance 蓝图、手动创建子系统或在各个控件里保存另一份权威状态。`Get Game Instance` 本身不能直接作为 `ShopService` 消息的 Target。
 
-## 3. 让现有 UI 取得服务
+推荐由本轮新增的 C++ PlayerController 管理根 UI：
 
-`UShopRunSubsystem` 继承 `UGameInstanceSubsystem`。UE 会随每个 GameInstance 自动创建它，不需要手动 `NewObject`，也不需要更换现有 GameInstance 蓝图或修改其父类。`Get Game Instance` 本身不是 `ShopService` 消息的目标。
+1. 打开程序 B 要使用的根 Widget Blueprint，在 **Class Settings → Implemented Interfaces → Add** 选择原生 **Shop View**，编译。按第 4 节实现接口事件，将事件连到现有界面的刷新与弹窗逻辑。
+2. 在内容浏览器的 **C++ Classes / Libary_Release** 找到 `ShopPlayerController`，右键 **Create Blueprint Class Based on ShopPlayerController**，保存为例如 `BP_ShopPlayerController`。也可新建 Blueprint Class，展开 **All Classes** 搜索该类。
+3. 打开这个蓝图，点 **Class Defaults**，在 Details 搜索 **Root Widget Class**，选择上一步的根 WBP，编译并保存。
+4. 同样从 `ShopGameMode` 派生例如 `BP_ShopGameMode`。打开 **Class Defaults → Classes → Player Controller Class**，设为 `BP_ShopPlayerController`。默认 **Start New Run On First Entry** 开启，仅在状态为 `Boot` 时自动开局。
+5. 打开需要接入的关卡，使用 **Window → World Settings** 打开世界设置，在 **GameMode Override** 选择 `BP_ShopGameMode`，保存关卡。此操作由接入者选择执行，本轮工具不会自动修改现有地图。也可由项目负责人在 **Project Settings → Maps & Modes** 配置默认 GameMode，但不需要两处重复设置。
+6. 根 WBP 初始化时调用 **Get Shop Service**，检查有效并保存返回的 **Shop Run Subsystem Object Reference**。所有 `Request...` 和查询节点的 Target 都连接这个变量；子控件可从根 UI 获取同一个服务。
+7. C++ PlayerController 在 `BeginPlay` 中创建根 WBP、添加到视口并 `RegisterView`，退出时自动注销和移除。采用此路线后，删除或停用现有关卡蓝图、旧 PlayerController、根 WBP 中重复的 **Create Widget / Add to Viewport / Register View / Request New Run** 初始化连线，避免生成两套 UI 或重复开局。
+8. 将按钮连接到第 5 节的请求，失败时显示 `GetLastError` 或命令结果的 `Message`。点击 Play 后核对状态和事件回调，再逐项验收完整流程。
 
-建议从现有 UI 根控件开始接入：
+`RegisterView` 只接受实现原生 `ShopView` 的对象；原来的自建蓝图接口不会自动收到消息。切换根界面时可调用 PlayerController 的 `Attach Shop View`，由它完成旧视图注销、新视图注册；同样不要再重复手动注册。
 
-1. 打开根 Widget Blueprint，在 **Class Settings → Implemented Interfaces → Add** 选择原生 **Shop View**，然后编译蓝图。
-2. 在根控件初始化处调用 **Get Shop Service**，检查返回值有效，保存为 `Shop Service` 变量。变量类型使用返回的 **Shop Run Subsystem Object Reference**。
-3. 从该变量调用 **Register View**，`View` 接根控件的 `Self`。返回 `true` 后，逻辑会向它发送 `RefreshShop` 和当前阶段需要的面板消息。
-4. 所有 `Request...` 和查询节点的 Target 都接同一个 `Shop Service` 变量。不要让各个子控件自己保存另一份钱、污染或库存作为权威数据。
-5. 在“开始游戏”按钮中调用 **Request New Run**，用返回值接 `Branch`；失败分支调用 **Get Last Error**，显示原因或临时用 `Print String` 查看。
-6. 根控件销毁或替换时调用 **Unregister View(Self)**。重新创建 UI 只需重新注册并刷新，不应无条件重新开局。
+如果必须保留原 PlayerController，也可以采用旧的手动路线：只创建一次根 WBP → `Get Shop Service` → `Register View(Self)` → 按需开局，根视图销毁时 `Unregister View(Self)`。这条路线与上面的 C++ PlayerController 自动路线二选一，不能同时保留两套创建流程。
 
-`RequestNewRun` 只允许在 `Boot` 或 `End` 阶段调用。正在经营时重复调用会被拒绝，防止打开新面板时误清空整局。新一局会重新初始化库存、资源、顾客、律令和对话进度。
-
-`RegisterView` 只接受实现了原生 `ShopView` 的对象。原有蓝图接口即使也叫“刷新商店”，也不会自动收到这里的消息；应将现有界面刷新函数接到下面列出的原生接口事件。
+`RequestNewRun` 只允许 `Boot/End`。自动 GameMode 遇到正在进行的局不会重置，遇到 `End` 也不会自动重开；“重新开始”按钮可在 `End` 调用它。若保留主菜单的手动开始按钮，将 GameMode 的自动开局开关关闭。重新创建 UI 只应显示现有状态，不应无条件开新局。
 
 ## 4. ShopView 的实际事件参数
 
@@ -83,7 +94,7 @@ Prototype 资产位于内容浏览器的 `Content / ProgramA / Prototype / Data`
 | `ShowDecreeResult` | `DecreeId: FName`，`Result: FShopCommandResult` | 显示本次律令操作结果。 |
 | `ShowObserveResult` | `CustomerIndex: int32`，`Customer: FCustomerRuntime` | 显示当前顾客的观察结果。 |
 | `ShowHistoryPanel` | `EventId: FName`，`Event: FEventData` | 显示历史文本与当前支持的见证按钮。 |
-| `ShowEnding` | `Ending: EShopEnding`，`Snapshot: FRunSnapshot` | 显示关门、污染释放、归还或循环结局。 |
+| `ShowEnding` | `Ending: EShopEnding`，`Snapshot: FRunSnapshot` | 显示关门、污染释放、归还或循环结局；用 GetEndingInfo 读取结局表的标题与文本。 |
 | `ShowOwlTip` | `LineId: FName`，`Text: FText` | 显示已配置的夜枭台词。 |
 | `OpenMarket` | `ItemIds: TArray<FName>`，`Snapshot: FRunSnapshot` | 用商品 ID 查询详情并生成集市条目。 |
 
@@ -126,12 +137,12 @@ Prototype 资产位于内容浏览器的 `Content / ProgramA / Prototype / Data`
 | `RequestOpenInside` | 无 | `DuskChoice` 选择本晚进入里书店。 |
 | `RequestOpenRestock` | 无 | `DuskChoice` 选择本晚采购表世界书籍。 |
 | `RequestCollectSecret` | `BookId` | `Inside` 消耗灵能，从有限的可收取数量中取得一本秘密书。 |
-| `RequestReadSecret` | `BookId` | `Inside` 阅读已拥有的秘密书，结算阅读收益、污染和可配置事件。 |
+| `RequestReadSecret` | `BookId` | `Inside` 阅读一册尚未读过的秘密书，结算收益与该副本的额外污染；历史本轮关闭。 |
 | `RequestEndNight` | 无 | `Inside/Restock` 完成本晚结算；选书期间需先取消选书。 |
 | `RequestPurify` | `Amount: int32` | 轻度污染的 `Calm` 面板，用等量灵能降低污染；数量须为正且不超过现有污染、灵能。 |
-| `RequestEnactDecree` | `DecreeId` | `Calm` 颁布今日候选中的可用律令，检查成本、生效和冷却状态。 |
+| `RequestEnactDecree` | `DecreeId` | `Calm` 颁布本次候选中的可用律令，检查成本、生效和冷却状态。 |
 | `RequestSkipDecree` | 无 | 关闭当前 `Calm` 请求并恢复原阶段。 |
-| `RequestHistoryChoice` | `Choice: EHistoryChoice` | `History` 处理当前事件；现有枚举只支持 `Witness`。 |
+| `RequestHistoryChoice` | `Choice: EHistoryChoice` | `History` 处理当前事件；枚举只支持 `Witness`，本轮历史开关关闭，暂不接入。 |
 | `RequestOwlTalk` | 无 | 有效游戏中、非 `Calm/History` 时请求台词；缺失台词返回 `Unavailable`。 |
 | `RequestOpenMarket` | 无 | 启用集市时，在每周末的 `NightEnd` 打开当周集市。 |
 | `RequestBuyMarketItem` | `Id` | `Market` 购买当前商品，价格、禁忌代价、效果、副作用一起结算，失败不扣除部分资源。 |
@@ -146,13 +157,13 @@ Prototype 资产位于内容浏览器的 `Content / ProgramA / Prototype / Data`
 
 旧接口返回 `false` 或失败枚举时，可立即读取 `GetLastError()` 和 `GetLastResult()`。结果表示最近一次命令，UI 应在当前请求返回后及时保存；不要延迟到之后另一个命令执行完才读取。
 
-其他蓝图查询有 `GetBookIds`、`GetBookRuntime(BookId)`、`GetDecreeInfo(Id)`、`GetMarketItemInfo(Id)`、`GetEventInfo(Id)`、`BuildCustomerNeedText(CustomerIndex)` 和 `HasMatchingStock(Type, Layer)`。其中 `FBookRuntime` 的 `Stock` 是拥有量，`AvailableToCollect` 是本晚剩余可收取量，`ReadCopies` 是已读册数。
+其他蓝图查询有 `GetBookIds`、`GetBookRuntime(BookId)`、`GetDecreeInfo(Id)`、`GetMarketItemInfo(Id)`、`GetEventInfo(Id)`、`GetEndingInfo(Ending)`、`BuildCustomerNeedText(CustomerIndex)` 和 `HasMatchingStock(Type, Layer)`。其中 `FBookRuntime` 的 `Stock` 是拥有量，`AvailableToCollect` 是本晚剩余可收取量，`ReadCopies` 是已读册数；秘密书的 `SecretCopies` 保存每册的已读、封存、篡改、污染状态。UI 查询这些副本即可，不应自行改写库存。`GetDecreeInfo` 也支持运行时保底项 `emergency_calm`，无需额外添加第八条律令数据。
 
-默认由项目设置加载配置。需要测试另一组表时，可在 `Boot/End` 调用 `ConfigureTables(Books, Customers, Rules, Decrees, Events, Market, Owl, Seed)`，再调用 `ValidateConfig` 查看输出错误。进行中的一局不能替换配置；编辑了 DataTable 后，重新启动 PIE 会重新加载，单独点击“新一局”使用的是当前已加载的配置副本。
+默认由项目设置加载配置。需要测试另一组表时，可在 `Boot/End` 调用 `ConfigureTables(Books, Customers, Rules, Decrees, Events, Market, Owl, Seed, Endings)`，再调用 `ValidateConfig` 查看输出错误。进行中的一局不能替换配置；编辑了 DataTable 后，重新启动 PIE 会重新加载，单独点击“新一局”使用的是当前已加载的配置副本。
 
 `RandomSeed=-1` 每局使用新种子；填非负固定种子便于复现顾客和经营随机结果。夜枭随机闲聊使用独立的 `CosmeticRandom`，点击闲聊不会改变后续顾客、候选或经营事件的随机结果。
 
-## 6. 阶段应怎样接到按钮
+## 6. 阶段与按钮
 
 ```text
 Boot --RequestNewRun--> Day <--> Sell
@@ -182,73 +193,80 @@ Boot --RequestNewRun--> Day <--> Sell
       次日 Day / End
 ```
 
-一晚只能选择 `Inside` 或 `Restock`，选定后不能在同一晚切换。白天顾客全部处理完后，UI 仍调用 `RequestEndDay`；不要把“顾客数组为空”直接视为整局结束。
+一晚只能选择 `Inside` 或 `Restock`，不能在同一晚切换。白天顾客处理完后仍由 UI 调用 `RequestEndDay`；顾客为空并不表示整局结束。Release 默认关闭集市，因此正常夜结后走次日分支。
 
-`Calm` 和 `History` 会中断当前流程，期间暂停顾客耐心。处理完净化、律令或见证后，C++ 恢复之前阶段；UI 不应自己调用“下一天”来关闭弹窗。多个事件会依次展示，污染达到终止上限或其他终止条件时可能直接进入 `End`。
+`Calm` 会中断当前流程并暂停顾客计时；净化、颁布或跳过后由 C++ 恢复原阶段。`History` 保留同样的中断恢复能力，但本轮关闭。UI 不应自己调用“下一天”来关闭这些面板。第 35 天完成夜结及必要的集市后进入结局，不创建第 36 天；关门或污染极限可提前结束。
 
-样例 `MaxDays=35`。第 35 天完成夜间和当晚必要集市后，结算归还或循环，不创建第 36 天。连续负余额或污染极限可提前结束。
+## 7. 本轮已确定的经营、库存与顾客规则
 
-## 7. 当前数值与未定稿规则
+下表是 Release 数据与实现约定；原来 Prototype 的起始灵能 24、两名夜间顾客及仅部分律令启用等样例不再代表本轮运行配置。改数值优先改表，再重新加载配置。
 
-以下是本次可执行配置和明确标注的解释，不代表策划已经最终定稿。改数值应优先修改 `DT_RunRules.Default` 或相应数据行，再重新加载配置。
-
-| 配置或约定 | 当前执行方式 |
+| 项目 | 当前执行规则 |
 | --- | --- |
-| `MaxDays=35`、`Rent=25` | 35 天期限，每日房租 25。均可配置。 |
-| `RentTiming=BeforeDusk` | `RequestEndDay` 时扣租；也可配置为 `NightEnd`。同一天不会重复扣租。 |
-| `NegativeDaysToClose=3`、`bImmediateBankruptcy=false` | 每次夜结检查余额，连续 3 次夜结为负才关门；恢复非负后计数清零。 |
-| 一晚结算 = 一个逻辑回合 | 顾客点击、阅读和弹窗不推进律令回合。`LoopholeDelayTurns=2` 表示颁布后第 2 次夜结触发漏洞。 |
-| 律令候选 | 每天抽取可用候选，排除禁用、生效中和冷却中的律令。结构默认候选数 4，Prototype 的 `Default` 行明确改为 3；候选不够时不重复补足。 |
-| `PollutedPatienceMultiplier=0.7` | 中度及以上生成的所有顾客，耐心时长乘 0.7；包括里书店顾客。不是每帧额外加速一套倒计时。 |
-| 收入倍率 | 当前仅作用于里书店售书收入，按乘积计算后向下取整；表世界售书不乘。它是“当晚收入”暂定解释。灵能收益倍率同样按乘积后向下取整。 |
-| `bAllowRepeatRead=false` | 每一册库存只读一次。拥有两册可读两次；售书优先卖出已读册，已读数不会超过库存。 |
-| `bRefillSecretOffersEachNight=true` | 每晚选择里书店时，将可收取数量补回该书 `InitialStock`。当晚每收一本减少一次，不能无限领取。 |
-| `InitialStock` / `InitialOwnedStock` | 表世界 `InitialStock` 直接成为库存；里世界 `InitialStock` 是待收取数量，`InitialOwnedStock` 才是开局已拥有量。 |
-| `StartPsychic=24`、`InsideCustomers=2` | 仅用于验证里书店操作的样例起始灵能和夜间客流，不是最终平衡值。 |
-| 秘密书收益覆写 | `PsychicYield=-1` 使用全局阅读灵能收益，`PollutionYield=-1` 使用全局阅读污染。显式填 0 表示零收益或零阅读污染；收书、售书仍使用各自全局污染值。 |
-| `RedeemTarget=1500`、`bReturnRequiresRedeemTarget=false` | 赎回目标保留为可配置项，默认不作为归还结局的必需金钱门槛。归还默认要求启蒙至少 60、污染低于 60。 |
-| `bStageCrossTriggersLoophole=false` | 跨污染阶段默认不额外触发一次漏洞，避免与定时漏洞重复；是否开启仍待策划确认。 |
-| `bEnableMarket=false` | Prototype 暂不开放集市；启用前必须填写商品表并通过校验。 |
-| `ClueDropChance=0` | Prototype 不随机掉落线索，需策划填写书籍线索池和概率。 |
+| 基本经营 | 初始金钱 100，期限 35 天，房租基础 25；`BeforeDusk` 在结束白天时扣租，也可配置 `NightEnd`。同一天只扣一次。 |
+| 负债 | 不因一次负余额立即关门；连续 3 次夜结余额为负触发关门，恢复非负会清零连续计数。 |
+| 灵能 | 初始 0，上限 100。秘密书已在开局拥有，可先阅读获得灵能。收取新书默认每本消耗 12 灵能。 |
+| 初始库存 | 所有书的 `InitialStock` 都是已拥有库存。旧 `InitialOwnedStock` 仅为兼容保留，不再额外相加。初始秘密书每册已封存、未读。 |
+| 每晚收书 | `CollectOfferPerNight` 与已拥有量分开；Release 每种秘密书每晚提供 1 册，进入里店时刷新，当晚收取后减少。新收取副本封存且未读。 |
+| 每册状态 | `SecretCopies` 分别记录 `bRead/bSealed/bAltered/bPolluted`；`Stock/ReadCopies` 是其汇总。封存不妨碍正常阅读，每册默认只读一次；售卖优先移除已读副本。 |
+| 基础收益和污染 | 阅读使用该书 `PsychicYield/PollutionYield`；值为 -1 才回退至全局阅读值。收书默认污染 +5，秘密书售卖默认 +10，分别使用全局配置，不被阅读污染覆盖。 |
+| 进步书启蒙 | `book_novel_03`、`book_history_02`、`book_history_03` 每次成功售出独立以 50% 概率获得启蒙 +2，失败交易不抽奖、不加启蒙。其他书默认没有该售卖奖励。 |
+| 额外污染 | 被篡改的副本阅读额外 +2；潮汐返架的污染副本阅读或售卖额外 +3，可与基础污染相加。 |
+| 收入与灵能倍率 | `IncomeMultiplier` 与当晚 `NightIncomeMultiplier` 相乘，只作用于里店售书收入，最终向下取整；灵能收益也先合并倍率再取整。不会回扣已经取得的收入。 |
+| 表店顾客 | 只出现 `Normal/Hurry`，需求为表店的小说、诗集或历史；白天基础客流 3～5，第二周起增加 1。 |
+| 里店顾客 | 四种角色均可出现，权重为普通 5、急躁 3、秘密 2、污染 2；污染顾客仍要求污染至少 61。每晚基础客流 4，不保证每类各一人。所有角色的里店需求都是 `Inside/Secret`，角色类型与需求类型分开。 |
+| 耐心 | 初始显示完整耐心（普通 30 秒、急躁 15 秒、秘密 30 秒、污染 20 秒）；当前污染达到 61 后，所有顾客按 `DeltaSeconds × 1.3` 消耗。污染降低后恢复正常速率，旧的生成时乘 0.7 规则停用。只有队首计时。 |
+| 客流代价 | 闭门律的 -1 只作用当晚里店；若队列已生成，会减少一个未服务、非当前选书顾客。无名律的永久客流惩罚作用白天和里店。 |
 
-污染阈值当前为轻度 31、中度 61、重度 86、终止上限 100，均来自配置。污染一旦达到终止上限会留下标记，即使同一结算中后续效果又降低污染，也不能用它取消已触发的终止条件。
+污染阶段阈值为轻度 31、中度 61、重度 86，终止上限 100。一次命令中污染达到终止上限会留下标记，即便后续减污也不能撤销已经触发的终止条件。增污统一经过 `ShopEffects::ChangePollution`，因此“下一次污染 +5”等效果不会遗漏正常业务入口。
 
-数值字段和文字字段用途不同：`EffectText`、`CostText`、`LoopholeText`、`Text` 负责显示；真正执行的是 `PsychicCost`、`PollutionCut` 以及 `CostEffect`、`Effects`、`LoopholeEffect` 等 `FShopEffect` 数组。只把说明改成“收入减半”不会自动改收入，必须同步填写对应的 `IncomeMultiplier=0.5` 效果。
+每次命令先在运行状态的副本上计算，整笔成功后提交；支付不足、无库存、无效阶段等失败不会留下部分扣款或消耗随机序列。UI 获取的快照也是只读副本，不能作为另一套独立经营状态。
 
-`FShopEffect.Amount` 对资源效果使用有符号数：例如 `Money=-30` 扣钱，`Pollution=5` 加污染；`Multiplier` 用于倍率。被动效果的 `DurationTurns=0` 跟随所属效果默认时效，`-1` 表示本局永久，正数表示逻辑回合数。当前 `BlockLightSpread` 因原文没有定义可执行的“扩散”规则，会被校验器拒绝；不要为了通过校验随意换成别的效果。
+## 8. 律令的持续期、候选和七条具体效果
 
-## 8. Prototype 内容的实际范围
+“2 回合”指两个**逻辑结算点**，不再固定解释为两晚。每次夜结推进一个点；本轮 `bAdvanceTurnOnStageRise=true`，污染跨入更高阶段也推进一个点。同一次动作即使跨多个阈值，最多追加一个阶段结算点，漏洞效果不会递归推进。普通点击和真实时间流逝本身不推进回合。漏洞到期后开始 3 个逻辑点的冷却；生效中或冷却中不可重复施行。兼容的 `bStageCrossTriggersLoophole=false` 不表示本轮关闭上述阶段回合推进。
 
-`DT_Books` 目前是策划已提供的六本原书：三本表书（潮声集、雨夜诗抄、本镇旧闻）和三本秘密书（潮汐历书、无名女孩的借书卡、革命前夜祷词）。没有补造尚未交付的第 7～16 本书。
+每次打开镇定面板都重新抽候选：轻度最多 3 项、中度和重度最多 4 项；先按阶段、启用、生效、冷却和**完整可支付成本**过滤，再抽取。候选不足不会补重复项。重度有 1 个逻辑点的处置宽限，未满足处置条件的额外污染按配置结算。
 
-`DT_Customers` 有普通、急躁、秘密、污染四种示例模板。当前显示名、权重和需求句属于样例，不能视为正式角色台词。需求句支持 `{类型}`，也兼容 `{BookType}`、`{NeedType}`、`{Type}` 和 `{Name}` 占位符。
+没有可支付的普通律令时显示 `emergency_calm`“应急镇定”：金钱 -20、污染 -5，允许负债，不消耗灵能，也不生成持续期、漏洞或冷却。它是运行时保底项；正式律令表仍只有七条。
 
-`DT_Decrees` 保留七条原始律令记录，其中仅三条启用：
+| 行名 / 律令 | 生效与代价 | 漏洞和本轮细则 |
+| --- | --- | --- |
+| `bronze_01` 静阅律 | 灵能 8、污染 -15，当晚里店后续售书收入 ×0.8。 | 到期后挂起一次“下次正向污染 +5”。零增量或减污不消费它，下一次正向增污只消费一次。 |
+| `bronze_02` 闭门律 | 灵能 8，阻止轻度扩散；当晚里店顾客 -1。 | 轻度污染夜结时，若有未封存秘密书副本或尚未收取的书，基础扩散为 +2；闭门生效时阻止该项。漏洞产生假顾客，只进入里店队列；白天触发则等待后续进入里店。假顾客不能交易，可观察或拒绝；轮到队首计时时每秒污染 +1，单个最多 +5，拒绝或超时后停止。 |
+| `bronze_03` 燃烛律 | 灵能 8、污染 -10，持续期间自然衰减 ×2、阅读灵能收益 ×0.8。 | 漏洞跳过一次夜间自然衰减；若在夜结开始时到期，则影响当次夜结。不是直接额外污染 +5。 |
+| `silver_01` 闭架律 | 灵能 18、污染 -30，随机一册已拥有秘密书被篡改，之后阅读额外污染 +2。 | 漏洞只从仍在库存且同时处于篡改、封存状态的副本中解封一册，并独立污染 +10；对应副本已售出、被焚毁或没有符合条件的副本时不解封其他书，+10 仍照常执行。篡改与封存按册记录，阅读仍允许读取封存本。 |
+| `silver_02` 守夜律 | 灵能 18，持续期间自然衰减 ×2；每晚金钱 -30 为本局永久代价。 | 漏洞后每夜污染 +3 为本局永久。相同律令来源、相同永久效果重复出现不会叠加多份。 |
+| `gold_01` 无名律 | 灵能 35、污染 -50，删除一条历史线索。 | 无线索时不可支付，因此不会进入普通候选。漏洞永久增加房租 10（累计最多 30）或减少客流 1（累计最多 2）；两项都可增加时等概率，达到上限的项让给另一项。 |
+| `gold_02` 潮汐律 | 灵能 35、污染 -50，随机毁去 2 册已拥有秘密书，并重置阶段提醒记录。 | 出售和销毁秘密书都会进入失去书籍池；漏洞从池中返还 1 册未封存、未读的污染书，阅读或售卖额外 +3；池空则污染 +5。“重置阈值”重置的是阶段提醒状态，数值 31/61/86/100 不变。 |
 
-| 行名 / 律令 | 当前状态 |
-| --- | --- |
-| `bronze_01` 静阅律 | 样例启用；收入 0.8 倍持续 1 次夜结。“下次污染 +5”暂解释为第 2 次夜结漏洞触发时 +5，并非已经实现“下一次污染事件”挂钩。 |
-| `bronze_03` 燃烛律 | 样例启用；衰减倍率、灵能收益倍率跟随律令时效。未定量的火污染暂用漏洞 +5 验证框架，此数值不是正式内容。 |
-| `silver_02` 守夜律 | 样例启用；衰减倍率随律令失效，每晚 -30 与漏洞后每夜 +3 目前持续本局，重复施法的叠加规则待确认。 |
-| `bronze_02` 闭门律 | 禁用；扩散、窗缝与假顾客机制缺少明确规则。 |
-| `silver_01` 闭架律 | 禁用；秘密书篡改的实际后果未定稿。 |
-| `gold_01` 无名律、`gold_02` 潮汐律 | 禁用；线索删除、永久劣化、重置阈值和潮水反噬等效果仍需完整定义。 |
+七条律令均已启用，`BlockLightSpread` 已有明确规则和实现，不再因“扩散未定义”被拒绝。启用不代表当前一定可用，例如 Release 历史关闭且默认线索掉落概率为 0 时，无名律通常因无线索而不可支付。
 
-结构化 `AlterSecretBook` 目前只标记 `FBookRuntime.bAltered`。标记之后究竟改售价、内容、污染还是其他行为，需要策划提供数据和规则；不能据此宣称完整的篡改机制已经完成。
+数值字段和文字字段的作用不同：`EffectText/CostText/LoopholeText/Text` 用于显示；真正执行的是 `PsychicCost/PollutionCut` 和结构化 `CostEffect/Effects/LoopholeEffect`。只把文字写成“收入减半”不会改变收入，必须同步配置对应倍率。`FShopEffect.Amount` 的资源值有正负号；`DurationTurns=0` 使用所属效果默认时效，`-1` 表示本局永久，正数表示逻辑点数。当晚收入/客流代价在当晚结算后清除。
 
-`DT_Events`、`DT_MarketItems`、`DT_Owl` 目前为空。历史事件、集市和夜枭的代码入口可供接入，但没有正式事件、商品或台词内容。夜枭缺内容时返回 `Unavailable`，不会自动生成占位话语；之后需提供 `GuideIndex=1..10` 的十条顺序引导，随机闲聊使用 `GuideIndex=0`。本次没有完成“16 本书”或“110 条夜枭台词”等正式内容量。
+## 9. 数据来源、结局与仍未纳入的内容
 
-`bRequireFinalContentCounts=false` 允许样例用于接入。正式内容准备完后可开启更严格的内容数量校验，但它不能替代策划逐行审稿。P2 存档/读档尚未实现，当前局内状态不会自动持久保存；议价规则尚未定义，本次未编造议价算法或对应按钮。
+Release 的 16 本书来自已提供的《数值调参表》书籍表，包含 9 本表书和 7 本秘密书，并非新增编造书籍。三本进步书的售卖奖励采用本轮确认的 50% 概率。顾客表使用四类配置，需求句支持 `{类型}`，也兼容 `{BookType}`、`{NeedType}`、`{Type}`、`{Name}` 占位符。
 
-## 9. 后续验证命令
+四个结局由 `DT_Endings` 驱动，含条件、优先级、标题和显示文本。当前优先级依次是关门、污染释放、归还、守旧循环；关门要求连续 3 次夜结负余额，污染释放阈值为 100，最终归还要求启蒙至少 60 且污染低于 60，否则进入循环。归还默认不要求金钱达到 1500；有需要时通过结局行的 `bRequireMoney/MinMoney` 设置，不能只修改旧的显示目标。UI 收到 `ShowEnding` 后调用 `GetEndingInfo` 读取对应文案。已有《剧情设定与分幕剧本 V7.0》提供剧情及结局文本，本轮表内采用四个结局的短说明，不声称完整演出已接入。
 
-下面给出运行入口，不代表该文档已经确认构建或测试结果。关闭正在占用该工程的编辑器，在 PowerShell 中执行；实际结果应以当次进程退出码、日志及测试报告为准。
+历史按用户决定暂缓，`bEnableHistory=false`，`DT_Events` 留空。剧本文件和女孩残页等内容已经提供；暂缓不表示缺少剧情文件，也不表示女孩见证的启蒙和灵能奖励已接入当前流程。
 
-只读检查磁盘上的七张 Prototype 表：
+集市和夜枭仍按原程序 B 范围对接。本轮保留了交易、禁忌代价、台词顺序与随机等 C++ 接口，但 Release 的两张内容表留空，`bEnableMarket=false`。已有调参表包含 12 件商品；这里的空表不表示策划未提供商品。夜枭接口需要 `GuideIndex=1..10` 的顺序引导及 `GuideIndex=0` 的随机闲聊；缺数据返回 `Unavailable`。本轮没有宣称 12 件商品或 110 条台词已完成正式导入、界面接线和验收。
+
+Release 启用核心内容数量校验，尚未启用包含程序 B 内容量的最终数量校验。P2 存档/读档未实现，本轮没有明确追加为任务。议价规则尚未定义，未编造议价算法。后续补内容优先编辑对应 DataTable，并通过配置校验；不要另造并行的 C++ 状态或 UI 结算逻辑。
+
+## 10. 检查与回归入口
+
+以下是运行入口，具体结果以当次进程、日志和报告为准。关闭占用工程的编辑器后，在 PowerShell 中执行。
+
+只读检查磁盘上的 Release 八张表：
 
 ```powershell
-& 'D:\epic\UE_5.1\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' 'D:\unreal_project\Libary_release\Libary_Release.uproject' -run=ShopBootstrap -VerifyOnly -unattended -NullRHI -nosplash -log
+& 'D:\epic\UE_5.1\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' 'D:\unreal_project\Libary_release\Libary_Release.uproject' -run=ShopReleaseData -VerifyOnly -unattended -NullRHI -nosplash -log
 ```
+
+旧 Prototype 的检查入口仍是 `-run=ShopBootstrap -VerifyOnly`。这两个命令都只用于检查各自的目录；不要把 Prototype 校验结果当成 Release 校验结果，也不要重新生成覆盖策划编辑过的表。
 
 运行程序 A 自动化测试组：
 
@@ -256,6 +274,22 @@ Boot --RequestNewRun--> Day <--> Sell
 & 'D:\epic\UE_5.1\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' 'D:\unreal_project\Libary_release\Libary_Release.uproject' -unattended -NullRHI -nosplash '-ExecCmds=Automation RunTests Bookstore.ProgramA;Quit' '-TestExit=Automation Test Queue Empty' '-ReportExportPath=D:\unreal_project\Libary_release\Saved\Automation\ProgramA' -log
 ```
 
-UE 5.1 中保留上面的 `;Quit`，它是 Automation 队列的退出子命令；仅写 `-TestExit` 可能在报告导出后仍不退出。
+UE 5.1 保留上面的 `;Quit`，它是 Automation 队列的退出子命令；仅写 `-TestExit` 可能在报告导出后仍不退出。
 
-UI 接入时先验证最短链路：取得服务 → 注册根视图 → 开局 → 查询顾客 → 选择队首 → 选书售出 → `RefreshShop/ResolveCustomer` 刷新。再逐步接入日结、黄昏互斥选择和夜结，最后接镇定、历史、集市与夜枭。现有界面只有完成这些事件和按钮连线后，才能使用本次 C++ 逻辑。
+UI 最短验收链路：所选 GameMode / PlayerController 启动 → 根 WBP 只创建一次并收到刷新 → `Get Shop Service` → 查询顾客 → 选择队首 → 售书 → `RefreshShop/ResolveCustomer` 更新 → 日结 → 黄昏互斥选择 → 夜结 → 次日。再验证逐册阅读、污染跨阶段弹窗、候选不足保底及结局显示。集市、夜枭和历史按各自接入范围另行验收。
+
+## 本轮实际验证记录
+
+2026-10-06 本轮实际状态：
+
+| 验证项 | 结果 |
+| --- | --- |
+| `Libary_Release Win64 Development` | 最新运行时代码完整编译、链接成功，退出码 0。日志：`Saved/Logs/ProgramA_Release_GameBuild.log`。这不是 Editor 目标或打包验收。 |
+| 自动化测试源码 | 共 28 项，已随 Game 目标通过编译；本轮尚未运行。涵盖初始已拥有、逐册库存、50% 售卖随机、昼夜顾客池、律令生命周期及反噬、假顾客和 35 天结局。 |
+| `Libary_ReleaseEditor` | 等待用户保存并关闭正在占用该项目的 UE 编辑器，尚未执行本轮完整编译。 |
+| Release 八表 | 生成器源码已完成；尚未执行资源创建、独立进程重载或 Release 回归测试。当前不能把目标目录当作已落盘资源。 |
+| 项目数据引用 | `DefaultGame.ini` 仍保留 Prototype 引用；将在 Release 八表成功生成并验证后切换，避免提前指向不存在的资产。 |
+| Git LFS | `.gitattributes` 与本地 LFS hooks 已配置；没有迁移既有提交历史，也没有提交或推送本轮变更。 |
+| UI、地图和包体 | 新 C++ GameMode/PlayerController 已编译；人工界面连接、关卡指定、PIE 试玩与 Windows 打包尚未验收。 |
+
+下一步顺序：关闭编辑器 → 完整编译 Editor 目标 → `ShopReleaseData` 创建八表 → 新进程 `-VerifyOnly` → 切换八个配置引用及 Cook 目录 → 执行 28 项自动化测试并修复失败项 → 按第 3 节接入 UI 和关卡 → 人工试玩及打包。不能将旧报告目录内之前的测试结果当成本轮 28 项结果。

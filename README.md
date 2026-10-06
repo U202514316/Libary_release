@@ -51,4 +51,6 @@ LogTemp: [CppBridge] Hello, Xingcheng! C++ is working.
 
 ## 程序 A：经营逻辑接入
 
-完整 C++ 服务、七张 Prototype 数据表、蓝图接线步骤和未定稿内容见 [程序 A C++ 接入说明](Docs/程序A_C++接入说明.md)。现有程序 B UI 仍需按文档连接接口；本节不代表已完成可直接游玩的整套界面。
+经营 C++、逐册秘密书、七条律令、表驱动结局及 Release 八张数据表的说明见 [程序 A C++ 接入说明](Docs/程序A_C++接入说明.md)。文档分别列出代码实现、UE 自动生成内容和人工 UI 接线，并提供 UE 5.1 中通过 `ShopPlayerController` / `ShopGameMode` 接入现有根 Widget 的点击步骤。
+
+Release 目标目录为 `/Game/ProgramA/Release/Data`；备用 Prototype 和以上 Hello 示例保留。当前 Game 目标已编译成功；Editor 编译、Release 资源生成和引用切换尚待关闭编辑器后执行。程序 B 现有 UI 与新接口的接入仍待验收，历史按本轮决定暂缓；集市、夜枭正式内容及 P2 存档不在本轮完成声明中。实际构建、数据生成和测试结果见接入说明末尾记录。

@@ -4,6 +4,7 @@
 
 namespace
 {
+    const FName EmergencyId(TEXT("emergency_calm"));
     bool Fail(FText& Error, const TCHAR* Message)
     {
         Error = FText::FromString(Message);
@@ -26,6 +27,7 @@ namespace
         case EShopEffectType::NightlyPollution:
         case EShopEffectType::CustomerCountDelta:
         case EShopEffectType::BlockLightSpread:
+        case EShopEffectType::NightIncomeMultiplier:
             return true;
         default:
             return false;
@@ -36,7 +38,8 @@ namespace
     {
         return Type == EShopEffectType::IncomeMultiplier
             || Type == EShopEffectType::PsychicGainMultiplier
-            || Type == EShopEffectType::DecayMultiplier;
+            || Type == EShopEffectType::DecayMultiplier
+            || Type == EShopEffectType::NightIncomeMultiplier;
     }
 
     bool ChangeNonnegativeResource(int32& Resource, int32 Amount, bool bIsCost, FText& Error)
@@ -77,20 +80,37 @@ namespace
         return true;
     }
 
-    TArray<FName> OwnedSecretIds(const FShopRunState& State, const FShopCatalog& Catalog,
-        FName TargetId)
+    struct FCopyAddress
     {
-        TArray<FName> Result;
-        for (const TPair<FName, FBookRuntime>& Pair : State.Inventory)
+        FName BookId;
+        int32 CopyIndex = 0;
+    };
+
+    TArray<FCopyAddress> SecretCopies(FShopRunState& State, const FShopCatalog& Catalog,
+        FName TargetId, bool bSealedOnly = false, bool bAlteredOnly = false)
+    {
+        TArray<FName> Ids;
+        State.Inventory.GetKeys(Ids);
+        Ids.Sort([](FName A, FName B) { return A.LexicalLess(B); });
+        TArray<FCopyAddress> Result;
+        for (FName Id : Ids)
         {
-            const FBookData* Book = Catalog.Books.Find(Pair.Key);
-            if (Book && Book->Layer == EBookLayer::Inside && Pair.Value.Stock > 0
-                && (TargetId.IsNone() || Pair.Key == TargetId))
+            const FBookData* Book = Catalog.Books.Find(Id);
+            if (!Book || Book->Layer != EBookLayer::Inside || (!TargetId.IsNone() && Id != TargetId)) continue;
+            FBookRuntime& Runtime = State.Inventory.FindChecked(Id);
+            ShopEconomy::NormalizeSecretCopies(Runtime);
+            for (int32 Index = 0; Index < Runtime.SecretCopies.Num(); ++Index)
             {
-                Result.Add(Pair.Key);
+                const FSecretBookCopy& Copy = Runtime.SecretCopies[Index];
+                if ((!bSealedOnly || Copy.bSealed) && (!bAlteredOnly || Copy.bAltered))
+                {
+                    FCopyAddress Address;
+                    Address.BookId = Id;
+                    Address.CopyIndex = Index;
+                    Result.Add(Address);
+                }
             }
         }
-        Result.Sort([](FName A, FName B) { return A.LexicalLess(B); });
         return Result;
     }
 
@@ -116,46 +136,108 @@ namespace
         {
             return false;
         }
-        TArray<FName> Ids = OwnedSecretIds(State, Catalog, Effect.TargetId);
-        int64 TotalCopies = 0;
-        for (FName Id : Ids)
-        {
-            TotalCopies += State.Inventory.FindChecked(Id).Stock;
-        }
-        if (bIsCost && TotalCopies < Effect.Amount)
+        TArray<FCopyAddress> Copies = SecretCopies(State, Catalog, Effect.TargetId);
+        if (bIsCost && Copies.Num() < Effect.Amount)
         {
             return Fail(Error, TEXT("There are not enough owned secret books to pay this cost."));
         }
-        const int32 CopiesToDestroy = static_cast<int32>(FMath::Min<int64>(TotalCopies, Effect.Amount));
+        const int32 CopiesToDestroy = FMath::Min(Copies.Num(), Effect.Amount);
+        if (static_cast<int64>(State.LostSecretBooks.Num()) + CopiesToDestroy > MAX_int32)
+        {
+            return Fail(Error, TEXT("The lost-book history exceeds the supported array range."));
+        }
         for (int32 Copy = 0; Copy < CopiesToDestroy; ++Copy)
         {
-            // Weight by copies, not by distinct titles. The sorted order makes seeded
-            // selection independent of TMap iteration order.
-            int64 Pick = TotalCopies <= MAX_int32
-                ? State.Random.RandHelper(static_cast<int32>(TotalCopies))
-                : static_cast<int64>(State.Random.GetFraction() * static_cast<double>(TotalCopies));
-            Pick = FMath::Min<int64>(Pick, TotalCopies - 1);
-            for (int32 Index = 0; Index < Ids.Num(); ++Index)
-            {
-                FBookRuntime& Runtime = State.Inventory.FindChecked(Ids[Index]);
-                if (Pick >= Runtime.Stock)
-                {
-                    Pick -= Runtime.Stock;
-                    continue;
-                }
-                // Aggregate inventory has no per-copy identity. Clamp the read count
-                // to the surviving stock, matching the stock/read-count invariant.
-                --Runtime.Stock;
-                Runtime.ReadCopies = FMath::Clamp(Runtime.ReadCopies, 0, Runtime.Stock);
-                if (Runtime.Stock == 0)
-                {
-                    Ids.RemoveAt(Index);
-                }
-                --TotalCopies;
-                break;
-            }
+            const FCopyAddress Chosen = Copies[State.Random.RandHelper(Copies.Num())];
+            FBookRuntime& Runtime = State.Inventory.FindChecked(Chosen.BookId);
+            Runtime.SecretCopies.RemoveAt(Chosen.CopyIndex);
+            ShopEconomy::RefreshBookCounts(Runtime);
+            State.LostSecretBooks.Add(Chosen.BookId);
+            // Rebuild after removal so indices remain valid, including the last copy.
+            if (Copy + 1 < CopiesToDestroy) Copies = SecretCopies(State, Catalog, Effect.TargetId);
         }
         return true;
+    }
+
+    bool AddCounter(int32& Counter, int32 Delta, FText& Error)
+    {
+        const int64 Next = static_cast<int64>(Counter) + Delta;
+        if (Counter < 0 || Delta < 0 || Next > MAX_int32)
+            return Fail(Error, TEXT("An effect counter is negative or exceeds the supported range."));
+        Counter = static_cast<int32>(Next);
+        return true;
+    }
+
+    bool ApplyBusinessPenalty(FShopRunState& State, const FRunRules& Rules, FText& Error)
+    {
+        if (Rules.PermanentRentPenalty < 0 || Rules.PermanentCustomerPenalty < 0
+            || Rules.MaxRentPenalty < 0 || Rules.MaxCustomerPenalty < 0
+            || State.RentPenalty < 0 || State.CustomerPenalty < 0)
+            return Fail(Error, TEXT("Business penalty rules must be nonnegative."));
+        const bool RentAvailable = Rules.PermanentRentPenalty > 0 && State.RentPenalty < Rules.MaxRentPenalty;
+        const bool CustomerAvailable = Rules.PermanentCustomerPenalty > 0 && State.CustomerPenalty < Rules.MaxCustomerPenalty;
+        if (!RentAvailable && !CustomerAvailable) return true;
+        // 50/50 while both axes can still worsen; a capped axis yields to the other.
+        const bool ChooseRent = RentAvailable && (!CustomerAvailable || State.Random.RandRange(0, 1) == 0);
+        if (ChooseRent)
+            State.RentPenalty = static_cast<int32>(FMath::Min<int64>(Rules.MaxRentPenalty,
+                static_cast<int64>(State.RentPenalty) + Rules.PermanentRentPenalty));
+        else
+            State.CustomerPenalty = static_cast<int32>(FMath::Min<int64>(Rules.MaxCustomerPenalty,
+                static_cast<int64>(State.CustomerPenalty) + Rules.PermanentCustomerPenalty));
+        return true;
+    }
+
+    bool ReturnLostBook(FShopRunState& State, const FShopCatalog& Catalog,
+        FName TargetId, FText& Error)
+    {
+        if (!ValidateSecretTarget(Catalog, TargetId, Error)) return false;
+        TArray<FName> Pool;
+        for (FName Id : State.LostSecretBooks)
+        {
+            const FBookData* Book = Catalog.Books.Find(Id);
+            if (!Book || Book->Layer != EBookLayer::Inside)
+                return Fail(Error, TEXT("Lost-book history references a missing or surface book."));
+            if (TargetId.IsNone() || Id == TargetId) Pool.Add(Id);
+        }
+        if (Pool.IsEmpty())
+        {
+            if (Catalog.Rules.ReturnedBookFallbackPollution < 0)
+                return Fail(Error, TEXT("Returned-book fallback pollution must be nonnegative."));
+            return ShopEffects::ChangePollution(State, Catalog, Catalog.Rules.ReturnedBookFallbackPollution, Error);
+        }
+        Pool.Sort([](FName A, FName B) { return A.LexicalLess(B); });
+        const FName Chosen = Pool[State.Random.RandHelper(Pool.Num())];
+        FBookRuntime& Runtime = State.Inventory.FindOrAdd(Chosen);
+        ShopEconomy::NormalizeSecretCopies(Runtime);
+        if (Runtime.SecretCopies.Num() == MAX_int32)
+            return Fail(Error, TEXT("Returned-book inventory exceeds the supported array range."));
+        FSecretBookCopy Returned;
+        Returned.bSealed = false;
+        Returned.bPolluted = true;
+        Runtime.SecretCopies.Add(Returned);
+        ShopEconomy::RefreshBookCounts(Runtime);
+        State.LostSecretBooks.RemoveAt(State.LostSecretBooks.Find(Chosen));
+        return true;
+    }
+
+    void ReduceCurrentInsideQueue(FShopRunState& State, int32 Reduction)
+    {
+        const bool Inside = State.Phase == EGamePhase::Inside || State.Phase == EGamePhase::InsideSell
+            || (State.Phase == EGamePhase::Calm
+                && (State.ResumePhase == EGamePhase::Inside || State.ResumePhase == EGamePhase::InsideSell));
+        if (!Inside) return;
+        int64 Remaining = -static_cast<int64>(Reduction);
+        for (int32 Index = State.Customers.Num() - 1; Index >= 0 && Remaining > 0; --Index)
+        {
+            FCustomerRuntime& Customer = State.Customers[Index];
+            if (!Customer.bServed && !Customer.bFake && Index != State.ActiveCustomer)
+            {
+                Customer.bServed = true;
+                Customer.Resolution = EShopActionResult::Unavailable;
+                --Remaining;
+            }
+        }
     }
 
     bool IsBlocked(const FShopRunState& State, FName Id)
@@ -174,9 +256,10 @@ namespace
         const FDecreeData& Data, int32& LoopholeAtTurn, int32& CooldownUntilTurn, FText& Error)
     {
         const int32 Delay = Data.LoopholeDelay == 0 ? Catalog.Rules.LoopholeDelayTurns : Data.LoopholeDelay;
+        const int32 Cooldown = Data.CooldownTurns == 0 ? Catalog.Rules.DecreeCooldownTurns : Data.CooldownTurns;
         const int64 LoopholeTurn = static_cast<int64>(State.Turn) + Delay;
-        const int64 CooldownTurn = LoopholeTurn + Data.CooldownTurns;
-        if (State.Turn < 0 || Delay <= 0 || Data.CooldownTurns < 0
+        const int64 CooldownTurn = LoopholeTurn + Cooldown;
+        if (State.Turn < 0 || Delay <= 0 || Cooldown < 0
             || LoopholeTurn > MAX_int32 || CooldownTurn > MAX_int32)
         {
             return Fail(Error, TEXT("Invalid decree delay, cooldown, or logical turn range."));
@@ -184,6 +267,30 @@ namespace
         LoopholeAtTurn = static_cast<int32>(LoopholeTurn);
         CooldownUntilTurn = static_cast<int32>(CooldownTurn);
         return true;
+    }
+
+    bool CanEnactOrdinary(const FShopRunState& State, const FShopCatalog& Catalog,
+        FName Id, FText& Error)
+    {
+        const FDecreeData* Data = Catalog.Decrees.Find(Id);
+        if (!Data || !Data->bEnabled || Id == EmergencyId)
+            return Fail(Error, TEXT("The selected decree is unavailable."));
+        const EPollutionStage Stage = ShopDecrees::GetStage(State.Pollution, Catalog.Rules);
+        if (Stage < Data->MinStage || Stage > Data->MaxStage)
+            return Fail(Error, TEXT("The selected decree is not available at this pollution stage."));
+        if (IsBlocked(State, Id))
+            return Fail(Error, TEXT("The selected decree is active or cooling down."));
+        if (Data->PsychicCost < 0 || Data->PollutionCut < 0)
+            return Fail(Error, TEXT("Decree resource cost and pollution reduction must be nonnegative."));
+        if (State.Psychic < Data->PsychicCost)
+            return Fail(Error, TEXT("There is not enough psychic energy to enact this decree."));
+        int32 EndTurn = 0, CooldownEnd = 0;
+        if (!DecreeTiming(State, Catalog, *Data, EndTurn, CooldownEnd, Error)) return false;
+        // Trial includes the base cost before checking all additional costs together.
+        // Its copied RNG cannot perturb the live run while choosing candidates.
+        FShopRunState Trial = State;
+        Trial.Psychic -= Data->PsychicCost;
+        return ShopEffects::Apply(Trial, Catalog, Data->CostEffect, Id, EndTurn, true, Error);
     }
 
     bool TriggerLoophole(FShopRunState& State, const FShopCatalog& Catalog,
@@ -199,8 +306,9 @@ namespace
         {
             return Fail(Error, TEXT("An active decree has no catalog row."));
         }
-        const int64 CooldownEnd = static_cast<int64>(State.Turn) + Data->CooldownTurns;
-        if (Data->CooldownTurns < 0 || CooldownEnd > MAX_int32)
+        const int32 Cooldown = Data->CooldownTurns == 0 ? Catalog.Rules.DecreeCooldownTurns : Data->CooldownTurns;
+        const int64 CooldownEnd = static_cast<int64>(State.Turn) + Cooldown;
+        if (Cooldown < 0 || CooldownEnd > MAX_int32)
         {
             return Fail(Error, TEXT("A decree cooldown exceeds the supported turn range."));
         }
@@ -216,6 +324,24 @@ namespace
         // durations override this default; permanent modifiers survive re-enactment.
         return ShopEffects::Apply(State, Catalog, Data->LoopholeEffect, Id, INDEX_NONE, false, Error);
     }
+}
+
+bool ShopEffects::ChangePollution(FShopRunState& State, const FShopCatalog& Catalog,
+    int32 Delta, FText& Error)
+{
+    Error = FText::GetEmpty();
+    if (Catalog.Rules.PollutionLimit <= 0 || State.Pollution < 0 || State.PendingPollutionBonus < 0)
+        return Fail(Error, TEXT("Pollution, pending bonus, and limit configuration are invalid."));
+    const int64 Bonus = Delta > 0 ? State.PendingPollutionBonus : 0;
+    const int64 Next = static_cast<int64>(State.Pollution) + Delta + Bonus;
+    if (Next > MAX_int32)
+        return Fail(Error, TEXT("A pollution effect exceeds the supported integer range."));
+    // Only scalar writes: callers may hold references to inventory or customer arrays.
+    State.Pollution = static_cast<int32>(FMath::Max<int64>(0, Next));
+    if (Delta > 0) State.PendingPollutionBonus = 0;
+    if (Delta > 0) State.PeakPollutionThisCommand = FMath::Max(State.PeakPollutionThisCommand, State.Pollution);
+    if (State.Pollution >= Catalog.Rules.PollutionLimit) State.bPollutionLimitReached = true;
+    return true;
 }
 
 bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
@@ -241,7 +367,26 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
             Modifier.Type = Effect.Type;
             Modifier.Amount = Effect.Amount;
             Modifier.Multiplier = Effect.Multiplier;
+            const bool NightScoped = Effect.Type == EShopEffectType::NightIncomeMultiplier
+                || Effect.Type == EShopEffectType::CustomerCountDelta;
+            if (NightScoped) Modifier.EndTurn = INDEX_NONE; // Settled/removed by the night coordinator.
+            int32 PreviousCustomerDelta = 0;
+            for (const FShopModifier& Previous : State.Modifiers)
+                if (Previous.SourceId == SourceId && Previous.Type == Effect.Type)
+                    PreviousCustomerDelta = Previous.Amount;
+            // In particular, Watch's permanent fee and pollution each have one entry
+            // per source, even when the decree has completed several life cycles.
+            State.Modifiers.RemoveAll([SourceId, &Effect](const FShopModifier& Previous)
+            {
+                return Previous.SourceId == SourceId && Previous.Type == Effect.Type;
+            });
             State.Modifiers.Add(Modifier);
+            if (Effect.Type == EShopEffectType::CustomerCountDelta)
+            {
+                const int64 ExtraReduction = static_cast<int64>(Effect.Amount) - PreviousCustomerDelta;
+                if (ExtraReduction < 0)
+                    ReduceCurrentInsideQueue(State, static_cast<int32>(FMath::Max<int64>(MIN_int32, ExtraReduction)));
+            }
             continue;
         }
 
@@ -254,9 +399,13 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
             }
             break;
         case EShopEffectType::Psychic:
-            if (!ChangeNonnegativeResource(State.Psychic, Effect.Amount, bIsCost, Error))
+            if (Catalog.Rules.PsychicMax < 0)
+                return Fail(Error, TEXT("PsychicMax must be nonnegative."));
+            if (bIsCost && Effect.Amount < 0 && static_cast<int64>(State.Psychic) + Effect.Amount < 0)
+                return Fail(Error, TEXT("There is not enough psychic energy to pay this effect."));
             {
-                return false;
+                const int64 NextPsychic = static_cast<int64>(State.Psychic) + Effect.Amount;
+                State.Psychic = static_cast<int32>(FMath::Clamp<int64>(NextPsychic, 0, Catalog.Rules.PsychicMax));
             }
             break;
         case EShopEffectType::Enlighten:
@@ -266,18 +415,9 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
             }
             break;
         case EShopEffectType::Pollution:
-            if (Catalog.Rules.PollutionLimit <= 0)
-            {
-                return Fail(Error, TEXT("PollutionLimit must be positive."));
-            }
-            if (!ChangeNonnegativeResource(State.Pollution, Effect.Amount, bIsCost, Error))
-            {
-                return false;
-            }
-            if (State.Pollution >= Catalog.Rules.PollutionLimit)
-            {
-                State.bPollutionLimitReached = true;
-            }
+            if (bIsCost && Effect.Amount < 0 && static_cast<int64>(State.Pollution) + Effect.Amount < 0)
+                return Fail(Error, TEXT("There is not enough pollution to pay this effect."));
+            if (!ChangePollution(State, Catalog, Effect.Amount, Error)) return false;
             break;
         case EShopEffectType::AddClue:
             if (Effect.TargetId.IsNone())
@@ -318,8 +458,8 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
             {
                 return false;
             }
-            const TArray<FName> Ids = OwnedSecretIds(State, Catalog, Effect.TargetId);
-            if (Ids.Num() == 0)
+            const TArray<FCopyAddress> Copies = SecretCopies(State, Catalog, Effect.TargetId);
+            if (Copies.Num() == 0)
             {
                 if (bIsCost)
                 {
@@ -327,11 +467,50 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
                 }
                 break;
             }
-            const FName Id = Ids[State.Random.RandHelper(Ids.Num())];
-            // No mechanical consequence beyond this flag is invented for sample data.
-            State.Inventory.FindChecked(Id).bAltered = true;
+            const FCopyAddress Chosen = Copies[State.Random.RandHelper(Copies.Num())];
+            FBookRuntime& Runtime = State.Inventory.FindChecked(Chosen.BookId);
+            Runtime.SecretCopies[Chosen.CopyIndex].bAltered = true;
+            ShopEconomy::RefreshBookCounts(Runtime);
             break;
         }
+        case EShopEffectType::NextPollutionBonus:
+            if (!AddCounter(State.PendingPollutionBonus, Effect.Amount, Error)) return false;
+            break;
+        case EShopEffectType::SpawnFakeCustomer:
+            if (!AddCounter(State.PendingFakeCustomers, Effect.Amount, Error)) return false;
+            break;
+        case EShopEffectType::SkipNightDecay:
+            if (!AddCounter(State.SkipDecayNights, Effect.Amount, Error)) return false;
+            break;
+        case EShopEffectType::UnlockSecretBook:
+        {
+            if (Effect.Amount < 0 || !ValidateSecretTarget(Catalog, Effect.TargetId, Error))
+                return Fail(Error, TEXT("UnlockSecretBook requires a valid target and nonnegative copy count."));
+            // The shelf loophole releases an altered, still-sealed copy. It must
+            // not substitute an unrelated sealed book after its target was lost.
+            TArray<FCopyAddress> Copies = SecretCopies(State, Catalog, Effect.TargetId, true, true);
+            const int32 Count = FMath::Min(Effect.Amount, Copies.Num());
+            for (int32 Index = 0; Index < Count; ++Index)
+            {
+                const FCopyAddress Chosen = Copies[State.Random.RandHelper(Copies.Num())];
+                FBookRuntime& Runtime = State.Inventory.FindChecked(Chosen.BookId);
+                Runtime.SecretCopies[Chosen.CopyIndex].bSealed = false;
+                ShopEconomy::RefreshBookCounts(Runtime);
+                if (Index + 1 < Count) Copies = SecretCopies(State, Catalog, Effect.TargetId, true, true);
+            }
+            // Pollution backlash is a separate authored Pollution effect. It still
+            // executes when no altered sealed copy remains, and consumes a bonus only once.
+            break;
+        }
+        case EShopEffectType::PermanentBusinessPenalty:
+            if (!ApplyBusinessPenalty(State, Catalog.Rules, Error)) return false;
+            break;
+        case EShopEffectType::ReturnLostSecretBook:
+            if (!ReturnLostBook(State, Catalog, Effect.TargetId, Error)) return false;
+            break;
+        case EShopEffectType::ResetPollutionThresholds:
+            State.StageResetPending = true;
+            break;
         default:
             return Fail(Error, TEXT("The effect type is not supported."));
         }
@@ -369,6 +548,30 @@ int32 ShopEffects::Sum(const FShopRunState& State, EShopEffectType Type)
     return static_cast<int32>(FMath::Clamp<int64>(Result, MIN_int32, MAX_int32));
 }
 
+FDecreeData ShopDecrees::GetFallbackDecree(const FRunRules& Rules)
+{
+    FDecreeData Data;
+    Data.Id = EmergencyId;
+    Data.DisplayName = FText::FromString(TEXT("应急镇定"));
+    Data.Quality = EDecreeQuality::Bronze;
+    Data.PsychicCost = 0;
+    Data.PollutionCut = Rules.EmergencyPollutionCut;
+    Data.MinStage = EPollutionStage::Light;
+    Data.MaxStage = EPollutionStage::Heavy;
+    Data.bFallback = true;
+    Data.bEnabled = true;
+    Data.CooldownTurns = 0;
+    Data.EffectText = FText::Format(FText::FromString(TEXT("污染降低 {0}。")), FText::AsNumber(Rules.EmergencyPollutionCut));
+    Data.CostText = FText::Format(FText::FromString(TEXT("支付 {0} 金钱，可负债；不消耗灵能。")), FText::AsNumber(Rules.EmergencyMoneyCost));
+    Data.LoopholeText = FText::FromString(TEXT("不产生持续律令、冷却或漏洞。"));
+    Data.Text = FText::FromString(TEXT("当前没有可支付的普通律令时提供的应急处置。"));
+    FShopEffect Fee;
+    Fee.Type = EShopEffectType::Money;
+    Fee.Amount = -FMath::Max(0, Rules.EmergencyMoneyCost);
+    Data.CostEffect.Add(Fee);
+    return Data;
+}
+
 EPollutionStage ShopDecrees::GetStage(int32 Pollution, const FRunRules& Rules)
 {
     if (Pollution >= Rules.HeavyThreshold) return EPollutionStage::Heavy;
@@ -382,7 +585,8 @@ void ShopDecrees::DrawCandidates(FShopRunState& State, const FShopCatalog& Catal
     State.DecreeCandidates.Reset();
     for (const TPair<FName, FDecreeData>& Pair : Catalog.Decrees)
     {
-        if (Pair.Value.bEnabled && !IsBlocked(State, Pair.Key))
+        FText Error;
+        if (CanEnactOrdinary(State, Catalog, Pair.Key, Error))
         {
             State.DecreeCandidates.Add(Pair.Key);
         }
@@ -392,44 +596,33 @@ void ShopDecrees::DrawCandidates(FShopRunState& State, const FShopCatalog& Catal
     {
         State.DecreeCandidates.Swap(Index, State.Random.RandRange(0, Index));
     }
-    State.DecreeCandidates.SetNum(FMath::Clamp(Catalog.Rules.DecreeCandidateCount, 0, State.DecreeCandidates.Num()));
+    const EPollutionStage Stage = GetStage(State.Pollution, Catalog.Rules);
+    const int32 ConfiguredCount = Stage == EPollutionStage::Heavy ? Catalog.Rules.DecreeCandidateCountHeavy
+        : Stage == EPollutionStage::Medium ? Catalog.Rules.DecreeCandidateCountMedium
+        : Catalog.Rules.DecreeCandidateCountLight;
+    // Validation rejects nonpositive configuration; retaining at least one available
+    // card also avoids a dead-end when this pure helper is used directly.
+    if (State.DecreeCandidates.IsEmpty()) State.DecreeCandidates.Add(EmergencyId);
+    else State.DecreeCandidates.SetNum(FMath::Clamp(ConfiguredCount, 1, State.DecreeCandidates.Num()));
 }
 
 bool ShopDecrees::CanEnact(const FShopRunState& State, const FShopCatalog& Catalog,
     FName Id, FText& Error)
 {
     Error = FText::GetEmpty();
-    const FDecreeData* Data = Catalog.Decrees.Find(Id);
-    if (!Data || !Data->bEnabled)
-    {
-        return Fail(Error, TEXT("The selected decree is unavailable."));
-    }
     if (!State.DecreeCandidates.Contains(Id))
     {
-        return Fail(Error, TEXT("The selected decree is not in today's candidate list."));
+        return Fail(Error, TEXT("The selected decree is not in the current calm candidate list."));
     }
-    if (IsBlocked(State, Id))
+    if (Id == EmergencyId)
     {
-        return Fail(Error, TEXT("The selected decree is active or cooling down."));
+        if (Catalog.Rules.EmergencyPollutionCut < 0 || Catalog.Rules.EmergencyMoneyCost < 0)
+            return Fail(Error, TEXT("Emergency decree cost and pollution reduction must be nonnegative."));
+        FShopRunState Trial = State;
+        return ShopEconomy::AddMoney(Trial, -Catalog.Rules.EmergencyMoneyCost, Error, false)
+            && ShopEffects::ChangePollution(Trial, Catalog, -Catalog.Rules.EmergencyPollutionCut, Error);
     }
-    if (Data->PsychicCost < 0 || Data->PollutionCut < 0)
-    {
-        return Fail(Error, TEXT("Decree resource cost and pollution reduction must be nonnegative."));
-    }
-    if (State.Psychic < Data->PsychicCost)
-    {
-        return Fail(Error, TEXT("There is not enough psychic energy to enact this decree."));
-    }
-    int32 EndTurn = 0, CooldownUntilTurn = 0;
-    if (!DecreeTiming(State, Catalog, *Data, EndTurn, CooldownUntilTurn, Error))
-    {
-        return false;
-    }
-    // Check compound costs against one speculative state, so two individually
-    // affordable costs cannot spend the same resource twice. RNG is copied as well.
-    FShopRunState Trial = State;
-    Trial.Psychic -= Data->PsychicCost;
-    return ShopEffects::Apply(Trial, Catalog, Data->CostEffect, Id, EndTurn, true, Error);
+    return CanEnactOrdinary(State, Catalog, Id, Error);
 }
 
 bool ShopDecrees::Enact(FShopRunState& State, const FShopCatalog& Catalog,
@@ -438,6 +631,12 @@ bool ShopDecrees::Enact(FShopRunState& State, const FShopCatalog& Catalog,
     if (!CanEnact(State, Catalog, Id, Error))
     {
         return false;
+    }
+    if (Id == EmergencyId)
+    {
+        // This is a transaction-safe one-shot, not an eighth authored decree.
+        return ShopEconomy::AddMoney(State, -Catalog.Rules.EmergencyMoneyCost, Error, false)
+            && ShopEffects::ChangePollution(State, Catalog, -Catalog.Rules.EmergencyPollutionCut, Error);
     }
     const FDecreeData& Data = Catalog.Decrees.FindChecked(Id);
     FDecreeRuntime Runtime;
@@ -504,23 +703,6 @@ bool ShopDecrees::TickTurn(FShopRunState& State, const FShopCatalog& Catalog,
 bool ShopDecrees::TriggerStageLoophole(FShopRunState& State,
     const FShopCatalog& Catalog, FText& Error)
 {
-    Error = FText::GetEmpty();
-    if (!Catalog.Rules.bStageCrossTriggersLoophole)
-    {
-        return true;
-    }
-    TArray<int32> Eligible;
-    for (int32 Index = 0; Index < State.Decrees.Num(); ++Index)
-    {
-        if (State.Decrees[Index].bActive && !State.Decrees[Index].bLoopholeTriggered)
-        {
-            Eligible.Add(Index);
-        }
-    }
-    Eligible.Sort([&State](int32 A, int32 B)
-    {
-        return State.Decrees[A].Id.LexicalLess(State.Decrees[B].Id);
-    });
-    return Eligible.Num() == 0
-        || TriggerLoophole(State, Catalog, Eligible[State.Random.RandHelper(Eligible.Num())], Error);
+    TArray<FName> Triggered;
+    return TickTurn(State, Catalog, Triggered, Error);
 }
