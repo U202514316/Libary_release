@@ -1,7 +1,6 @@
 #include "ShopPlayerController.h"
 #include "ShopRunSubsystem.h"
 #include "ShopView.h"
-#include "ShopSecretTradeWidget.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/GameInstance.h"
 
@@ -26,9 +25,8 @@ void AShopPlayerController::BeginPlay()
     Mode.SetHideCursorDuringCapture(false);
     Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
     SetInputMode(Mode);
-    TSubclassOf<UUserWidget> ViewClass = RootWidgetClass;
-    if (bUseSecretTradeDemoUI) ViewClass = UShopSecretTradeWidget::StaticClass();
-    if (ViewClass) AttachShopView(CreateWidget<UUserWidget>(this, ViewClass));
+    // Presentation is selected by the project's Widget Blueprint, never by a native demo override.
+    if (RootWidgetClass) AttachShopView(CreateWidget<UUserWidget>(this, RootWidgetClass));
 }
 
 bool AShopPlayerController::AttachShopView(UUserWidget* View)

@@ -17,9 +17,8 @@ public:
     virtual void BeginPlay() override;
     virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
-    /** Checked: use the native trading UI. Unchecked: use RootWidgetClass below. Existing widget assets are untouched. */
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Bookstore|UI") bool bUseSecretTradeDemoUI = true;
-    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Bookstore|UI", meta=(EditCondition="!bUseSecretTradeDemoUI")) TSubclassOf<UUserWidget> RootWidgetClass;
+    /** Optional user-authored root widget implementing ShopView. Leave unset to create/register the UI in Blueprint. */
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Bookstore|UI") TSubclassOf<UUserWidget> RootWidgetClass;
     UPROPERTY(BlueprintReadOnly, Transient, Category="Bookstore|UI") TObjectPtr<UUserWidget> RootWidget;
     UFUNCTION(BlueprintPure, Category="Bookstore|Service") UShopRunSubsystem* GetShopRun() const;
     UFUNCTION(BlueprintCallable, Category="Bookstore|UI") bool AttachShopView(UUserWidget* View);
