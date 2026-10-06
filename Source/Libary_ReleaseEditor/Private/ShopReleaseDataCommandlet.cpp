@@ -175,7 +175,7 @@ namespace
         Rules.CustomersMin = 3;
         Rules.CustomersMax = 5;
         Rules.WeekTwoCustomerBonus = 1;
-        Rules.InsideCustomers = 4; // Authorized implementation decision; not a promise of one customer per kind.
+        Rules.InsideCustomers = 4; // Legacy field name: night-time FRONT-shop count, not inside-store visitors.
         Rules.DaysPerWeek = 7;
         Rules.StartPsychic = 0;
         Rules.PsychicMax = 100;

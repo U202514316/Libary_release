@@ -193,14 +193,14 @@ bool FShopConfigValidationTest::RunTest(const FString& Parameters)
     {
         FFixture F;
         F.Customers->FindRow<FCustomerData>(TEXT("TEST_inside"), TEXT("TEST"))->MinPollution = 61;
-        // Inside demand no longer requires a Secret-role visitor: Normal/Hurry may
-        // visit inside too. Gating only the Secret role must not block entry.
-        if (!TestTrue(TEXT("Normal visitors keep inside enterable at low pollution"), F.Start())) return false;
-        if (!TestTrue(TEXT("Inside still opens without an eligible Secret-role visitor"), F.OpenNight(true))) return false;
+        if (!TestTrue(TEXT("Normal visitors keep the night storefront available"), F.Start())) return false;
+        if (!TestTrue(TEXT("Inside management opens without eligible Secret visitors"), F.OpenNight(true))) return false;
+        TestEqual(TEXT("Management entry does not create customers"), F.Queue().Num(), 0);
+        if (!TestTrue(TEXT("Open nighttime table storefront"), IShopService::Execute_RequestOpenTableShop(F.Shop.Get()).bSucceeded)) return false;
         for (const FCustomerRuntime& Customer : F.Queue())
         {
-            TestEqual(TEXT("Eligible normal visitor can use the inside shop"), static_cast<int32>(Customer.Kind), static_cast<int32>(ECustomerKind::Normal));
-            TestEqual(TEXT("Role does not change inside book demand"), static_cast<int32>(Customer.NeedType), static_cast<int32>(EBookType::Secret));
+            TestEqual(TEXT("Only eligible Normal role is generated"), static_cast<int32>(Customer.Kind), static_cast<int32>(ECustomerKind::Normal));
+            TestEqual(TEXT("Normal visitor requests an ordinary book at night"), static_cast<int32>(Customer.NeedType), static_cast<int32>(EBookType::Novel));
         }
     }
     {
@@ -354,7 +354,9 @@ bool FShopPatienceModalTest::RunTest(const FString& Parameters)
         Event.ResultA.Add(Resource(EShopEffectType::Enlighten, 5));
         F.Events->AddRow(Event.Id, Event);
         if (!TestTrue(TEXT("Start history fixture"), F.Start()) || !TestTrue(TEXT("Choose inside"), F.OpenNight(true))) return false;
+        if (!TestTrue(TEXT("Generate night queue"), IShopService::Execute_RequestOpenTableShop(F.Shop.Get()).bSucceeded)) return false;
         F.Shop->Tick(3.f);
+        if (!TestTrue(TEXT("Return to inside management"), IShopService::Execute_RequestOpenInside(F.Shop.Get()).bSucceeded)) return false;
         const float Patience = F.Queue()[0].Patience;
         if (!TestTrue(TEXT("Read opens authored test event"), IShopService::Execute_RequestReadSecret(F.Shop.Get(), Secret).bSucceeded)) return false;
         Phase(*this, F, EGamePhase::History, TEXT("History modal is active"));
@@ -363,12 +365,17 @@ bool FShopPatienceModalTest::RunTest(const FString& Parameters)
         TestTrue(TEXT("Witness resumes"), IShopService::Execute_RequestHistoryChoice(F.Shop.Get(), EHistoryChoice::Witness).bSucceeded);
         Phase(*this, F, EGamePhase::Inside, TEXT("History resumes inside"));
         F.Shop->Tick(1.f);
-        TestEqual(TEXT("Patience resumes after history"), F.Queue()[0].Patience, Patience - 1.f);
+        TestEqual(TEXT("Inside management still pauses patience after history"), F.Queue()[0].Patience, Patience);
+        if (!TestTrue(TEXT("Return to nighttime storefront"), IShopService::Execute_RequestOpenTableShop(F.Shop.Get()).bSucceeded)) return false;
+        F.Shop->Tick(1.f);
+        TestEqual(TEXT("Patience resumes in the nighttime storefront"), F.Queue()[0].Patience, Patience - 1.f);
     }
     {
         FFixture F;
         F.Rules.StartPollution = 30;
         if (!TestTrue(TEXT("Start calm fixture"), F.Start()) || !TestTrue(TEXT("Choose inside"), F.OpenNight(true))) return false;
+        if (!TestTrue(TEXT("Generate night queue"), IShopService::Execute_RequestOpenTableShop(F.Shop.Get()).bSucceeded)) return false;
+        if (!TestTrue(TEXT("Return to management"), IShopService::Execute_RequestOpenInside(F.Shop.Get()).bSucceeded)) return false;
         if (!TestTrue(TEXT("Read crosses light threshold"), IShopService::Execute_RequestReadSecret(F.Shop.Get(), Secret).bSucceeded)) return false;
         Phase(*this, F, EGamePhase::Calm, TEXT("Calm interrupts on upward stage transition"));
         const float Patience = F.Queue()[0].Patience;
@@ -376,7 +383,10 @@ bool FShopPatienceModalTest::RunTest(const FString& Parameters)
         TestEqual(TEXT("Calm modal pauses patience"), F.Queue()[0].Patience, Patience);
         TestTrue(TEXT("Skip calm is available"), IShopService::Execute_RequestSkipDecree(F.Shop.Get()).bSucceeded);
         F.Shop->Tick(1.f);
-        TestEqual(TEXT("Patience resumes after calm"), F.Queue()[0].Patience, Patience - 1.f);
+        TestEqual(TEXT("Inside management still pauses patience after calm"), F.Queue()[0].Patience, Patience);
+        if (!TestTrue(TEXT("Return to nighttime storefront"), IShopService::Execute_RequestOpenTableShop(F.Shop.Get()).bSucceeded)) return false;
+        F.Shop->Tick(1.f);
+        TestEqual(TEXT("Patience resumes in the nighttime storefront"), F.Queue()[0].Patience, Patience - 1.f);
     }
     return true;
 }

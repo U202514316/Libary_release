@@ -98,7 +98,6 @@ namespace
             const FBookData* Book = Catalog.Books.Find(Id);
             if (!Book || Book->Layer != EBookLayer::Inside || (!TargetId.IsNone() && Id != TargetId)) continue;
             FBookRuntime& Runtime = State.Inventory.FindChecked(Id);
-            ShopEconomy::NormalizeSecretCopies(Runtime);
             for (int32 Index = 0; Index < Runtime.SecretCopies.Num(); ++Index)
             {
                 const FSecretBookCopy& Copy = Runtime.SecretCopies[Index];
@@ -209,7 +208,6 @@ namespace
         Pool.Sort([](FName A, FName B) { return A.LexicalLess(B); });
         const FName Chosen = Pool[State.Random.RandHelper(Pool.Num())];
         FBookRuntime& Runtime = State.Inventory.FindOrAdd(Chosen);
-        ShopEconomy::NormalizeSecretCopies(Runtime);
         if (Runtime.SecretCopies.Num() == MAX_int32)
             return Fail(Error, TEXT("Returned-book inventory exceeds the supported array range."));
         FSecretBookCopy Returned;
@@ -221,12 +219,13 @@ namespace
         return true;
     }
 
-    void ReduceCurrentInsideQueue(FShopRunState& State, int32 Reduction)
+    void ReduceCurrentNightQueue(FShopRunState& State, int32 Reduction)
     {
-        const bool Inside = State.Phase == EGamePhase::Inside || State.Phase == EGamePhase::InsideSell
-            || (State.Phase == EGamePhase::Calm
-                && (State.ResumePhase == EGamePhase::Inside || State.ResumePhase == EGamePhase::InsideSell));
-        if (!Inside) return;
+        const EGamePhase EffectivePhase = State.Phase == EGamePhase::Calm || State.Phase == EGamePhase::History
+            ? State.ResumePhase : State.Phase;
+        const bool bNightQueue = EffectivePhase == EGamePhase::NightShop || EffectivePhase == EGamePhase::NightSell ||
+            (State.bNightCustomersGenerated && (EffectivePhase == EGamePhase::Inside || EffectivePhase == EGamePhase::Restock));
+        if (!bNightQueue) return;
         int64 Remaining = -static_cast<int64>(Reduction);
         for (int32 Index = State.Customers.Num() - 1; Index >= 0 && Remaining > 0; --Index)
         {
@@ -349,6 +348,12 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
     bool bIsCost, FText& Error)
 {
     Error = FText::GetEmpty();
+    for (const auto& Pair : State.Inventory)
+    {
+        const FBookData* Book = Catalog.Books.Find(Pair.Key);
+        if (Book && Book->Layer == EBookLayer::Inside && !ShopEconomy::IsSecretInventoryValid(Pair.Value))
+            return Fail(Error, TEXT("Secret-copy inventory is inconsistent; effects cannot repair or create owned copies implicitly."));
+    }
     for (const FShopEffect& Effect : Effects)
     {
         if (IsPassive(Effect.Type))
@@ -385,7 +390,7 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
             {
                 const int64 ExtraReduction = static_cast<int64>(Effect.Amount) - PreviousCustomerDelta;
                 if (ExtraReduction < 0)
-                    ReduceCurrentInsideQueue(State, static_cast<int32>(FMath::Max<int64>(MIN_int32, ExtraReduction)));
+                    ReduceCurrentNightQueue(State, static_cast<int32>(FMath::Max<int64>(MIN_int32, ExtraReduction)));
             }
             continue;
         }
