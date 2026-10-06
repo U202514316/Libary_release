@@ -215,6 +215,37 @@ bool FShopConfigValidationTest::RunTest(const FString& Parameters)
         F.Books->RowStruct = FCustomerData::StaticStruct();
         TestFalse(TEXT("Wrong native row structure rejected"), F.Start());
     }
+    for (const int32 Amount : { -1, 0, 1 })
+    {
+        FFixture F;
+        F.Decrees->FindRow<FDecreeData>(Decree, TEXT("TEST"))->LoopholeEffect.Add(
+            Resource(EShopEffectType::UnlockSecretBook, Amount));
+        TestEqual(*FString::Printf(TEXT("UnlockSecretBook Amount %d is accepted only when nonnegative"), Amount),
+            F.Start(), Amount >= 0);
+        if (Amount < 0)
+        {
+            Phase(*this, F, EGamePhase::Boot, TEXT("Negative unlock count is rejected before the run starts"));
+            TestEqual(TEXT("Negative unlock count is a configuration error"),
+                static_cast<int32>(F.Shop->GetLastResult().Code), static_cast<int32>(EShopActionResult::InvalidConfig));
+        }
+    }
+    const FName ReturnTargets[] = { NAME_None, Secret, Novel, FName(TEXT("TEST_missing_return_target")) };
+    for (const FName TargetId : ReturnTargets)
+    {
+        FFixture F;
+        FShopEffect ReturnEffect = Resource(EShopEffectType::ReturnLostSecretBook, 1);
+        ReturnEffect.TargetId = TargetId;
+        F.Decrees->FindRow<FDecreeData>(Decree, TEXT("TEST"))->LoopholeEffect.Add(ReturnEffect);
+        const bool bValidTarget = TargetId.IsNone() || TargetId == Secret;
+        TestEqual(*FString::Printf(TEXT("ReturnLostSecretBook target %s must be empty or an existing inside book"), *TargetId.ToString()),
+            F.Start(), bValidTarget);
+        if (!bValidTarget)
+        {
+            Phase(*this, F, EGamePhase::Boot, TEXT("Invalid return target is rejected before the run starts"));
+            TestEqual(TEXT("Invalid return target is a configuration error"),
+                static_cast<int32>(F.Shop->GetLastResult().Code), static_cast<int32>(EShopActionResult::InvalidConfig));
+        }
+    }
     return true;
 }
 

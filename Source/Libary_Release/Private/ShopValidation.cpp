@@ -11,13 +11,15 @@ namespace
             if (!StaticEnum<EShopEffectType>()->IsValidEnumValue(static_cast<int64>(Effect.Type)) ||
                 !FMath::IsFinite(Effect.Multiplier) || Effect.Multiplier < 0.f || Effect.DurationTurns < -1 || Effect.DurationTurns > 100000)
                 return Fail(Error, Row + TEXT(": invalid effect type, multiplier or duration"));
-            if ((Effect.Type == EShopEffectType::DestroySecretBooks || Effect.Type == EShopEffectType::AlterSecretBook || Effect.Type == EShopEffectType::UnlockSecretBook) && !Effect.TargetId.IsNone())
+            if ((Effect.Type == EShopEffectType::DestroySecretBooks || Effect.Type == EShopEffectType::AlterSecretBook ||
+                Effect.Type == EShopEffectType::UnlockSecretBook || Effect.Type == EShopEffectType::ReturnLostSecretBook) && !Effect.TargetId.IsNone())
             {
                 const FBookData* Book = C.Books.Find(Effect.TargetId);
                 if (!Book || Book->Layer != EBookLayer::Inside) return Fail(Error, Row + TEXT(": effect references a missing/non-secret book"));
             }
             if (Effect.Type == EShopEffectType::AddClue && Effect.TargetId.IsNone()) return Fail(Error, Row + TEXT(": AddClue needs TargetId"));
             if (Effect.Type == EShopEffectType::DestroySecretBooks && Effect.Amount < 0) return Fail(Error, Row + TEXT(": DestroySecretBooks Amount must be nonnegative"));
+            if (Effect.Type == EShopEffectType::UnlockSecretBook && Effect.Amount < 0) return Fail(Error, Row + TEXT(": UnlockSecretBook Amount must be nonnegative"));
             if ((Effect.Type == EShopEffectType::SpawnFakeCustomer || Effect.Type == EShopEffectType::SkipNightDecay ||
                 Effect.Type == EShopEffectType::NextPollutionBonus || Effect.Type == EShopEffectType::ReturnLostSecretBook ||
                 Effect.Type == EShopEffectType::BlockLightSpread) && (Effect.Amount < 0 || Effect.Amount > 10000))
