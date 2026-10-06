@@ -10,7 +10,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FShopChanged);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FShopCustomerResolved, int32, CustomerIndex, EShopActionResult, Result);
 
 /** Authoritative single-player run. Mutations copy, validate and commit state before notifications. */
-UCLASS()
+UCLASS(BlueprintType)
 class LIBARY_RELEASE_API UShopRunSubsystem : public UGameInstanceSubsystem, public IShopService, public FTickableGameObject
 {
     GENERATED_BODY()
