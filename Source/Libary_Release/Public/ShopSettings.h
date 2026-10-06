@@ -19,5 +19,6 @@ public:
     UPROPERTY(Config, EditAnywhere, Category="Data") TSoftObjectPtr<UDataTable> Events;
     UPROPERTY(Config, EditAnywhere, Category="Data") TSoftObjectPtr<UDataTable> MarketItems;
     UPROPERTY(Config, EditAnywhere, Category="Data") TSoftObjectPtr<UDataTable> OwlLines;
+    UPROPERTY(Config, EditAnywhere, Category="Data") TSoftObjectPtr<UDataTable> Endings;
     UPROPERTY(Config, EditAnywhere, Category="Testing") int32 RandomSeed = -1;
 };

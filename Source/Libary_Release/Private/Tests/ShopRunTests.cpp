@@ -4,6 +4,7 @@
 #include "ShopRunSubsystem.h"
 #include "ShopTypes.h"
 #include "ShopStory.h"
+#include "ShopDecrees.h"
 #include "Engine/GameInstance.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -69,8 +70,10 @@ namespace ShopRunTests
             Book.Layer = EBookLayer::Inside;
             Book.Cost = 0;
             Book.Price = 60;
+            // Release contract: InitialStock is owned in both layers. Offers are separate.
             Book.InitialStock = 1;
-            Book.InitialOwnedStock = 1;
+            Book.InitialOwnedStock = 0;
+            Book.CollectOfferPerNight = 1;
             Books->AddRow(Secret, Book);
 
             FCustomerData Customer;
@@ -89,13 +92,18 @@ namespace ShopRunTests
                 Row.PollutionCut = 0;
                 Decrees->AddRow(Row.Id, Row);
             }
-            Rules.StartPsychic = 100;
+            // These scenarios need funds for decree transactions; the actual release
+            // default is zero and is covered by the separate release-contract tests.
+            Rules.StartPsychic = 24;
             Rules.CustomersMin = Rules.CustomersMax = 3;
             Rules.WeekTwoCustomerBonus = 0;
             Rules.InsideCustomers = 2;
             Rules.RandomNeedPool = {EBookType::Novel};
             Rules.Rent = 0;
             Rules.PollutionDecay = 0;
+            // Isolate the existing exact-delta assertions from the newly authored
+            // loose-book spread mechanic, which has its own release-flow tests.
+            Rules.LightSpreadPerNight = 0;
             Rules.DecreeCandidateCount = 3;
             Rules.bEnableMarket = false;
         }
@@ -185,7 +193,21 @@ bool FShopConfigValidationTest::RunTest(const FString& Parameters)
     {
         FFixture F;
         F.Customers->FindRow<FCustomerData>(TEXT("TEST_inside"), TEXT("TEST"))->MinPollution = 61;
-        TestFalse(TEXT("Inside must remain enterable at low pollution"), F.Start());
+        // Inside demand no longer requires a Secret-role visitor: Normal/Hurry may
+        // visit inside too. Gating only the Secret role must not block entry.
+        if (!TestTrue(TEXT("Normal visitors keep inside enterable at low pollution"), F.Start())) return false;
+        if (!TestTrue(TEXT("Inside still opens without an eligible Secret-role visitor"), F.OpenNight(true))) return false;
+        for (const FCustomerRuntime& Customer : F.Queue())
+        {
+            TestEqual(TEXT("Eligible normal visitor can use the inside shop"), static_cast<int32>(Customer.Kind), static_cast<int32>(ECustomerKind::Normal));
+            TestEqual(TEXT("Role does not change inside book demand"), static_cast<int32>(Customer.NeedType), static_cast<int32>(EBookType::Secret));
+        }
+    }
+    {
+        FFixture F;
+        F.Customers->FindRow<FCustomerData>(TEXT("TEST_normal"), TEXT("TEST"))->MinPollution = 61;
+        F.Customers->FindRow<FCustomerData>(TEXT("TEST_inside"), TEXT("TEST"))->MinPollution = 61;
+        TestFalse(TEXT("A catalog with no low-pollution visitors is still rejected"), F.Start());
     }
     {
         FFixture F;
@@ -289,6 +311,9 @@ bool FShopPatienceModalTest::RunTest(const FString& Parameters)
     }
     {
         FFixture F;
+        // Historical content is deliberately off in the release. This regression
+        // opts in solely to continue verifying the authored-test modal lifecycle.
+        F.Rules.bEnableHistory = true;
         FEventData Event;
         Event.Id = TEXT("TEST_history");
         Event.Trigger = EShopEventTrigger::OnRead;
@@ -330,6 +355,9 @@ bool FShopDecreeDelayTest::RunTest(const FString& Parameters)
 {
     FFixture F;
     F.Rules.StartPollution = 30;
+    // This test counts night-settlement TTL only. Stage-rise turn advancement is
+    // independently exercised with release defaults by the new flow tests.
+    F.Rules.bAdvanceTurnOnStageRise = false;
     FDecreeData* Rule = F.Decrees->FindRow<FDecreeData>(Decree, TEXT("TEST"));
     Rule->LoopholeDelay = 2;
     Rule->LoopholeEffect.Add(Resource(EShopEffectType::Pollution, 7));
@@ -351,9 +379,11 @@ bool FShopDecreeDelayTest::RunTest(const FString& Parameters)
     if (!TestTrue(TEXT("Day two"), F.Continue()) || !TestTrue(TEXT("Restock night two"), F.OpenNight(false)) || !TestTrue(TEXT("Second settlement"), F.Settle())) return false;
     TestTrue(TEXT("Second night triggers loophole"), F.Snapshot().ActiveDecrees[0].bLoopholeTriggered);
     TestFalse(TEXT("Triggered decree is no longer active"), F.Snapshot().ActiveDecrees[0].bActive);
+    TestEqual(TEXT("Default cooldown starts after the loophole at turn two"), F.Snapshot().ActiveDecrees[0].CooldownUntilTurn, 2 + F.Rules.DecreeCooldownTurns);
     TestEqual(TEXT("Penalty added exactly once"), F.Snapshot().Pollution, Enacted.Pollution + 7);
     if (!TestTrue(TEXT("Day three"), F.Continue()) || !TestTrue(TEXT("Restock night three"), F.OpenNight(false)) || !TestTrue(TEXT("Third settlement"), F.Settle())) return false;
     TestEqual(TEXT("Expired decree does not trigger again"), F.Snapshot().Pollution, Enacted.Pollution + 7);
+    TestFalse(TEXT("A decree still cooling down is absent from the next candidate pool"), F.Snapshot().DecreeCandidates.Contains(Decree));
     return true;
 }
 
@@ -365,13 +395,33 @@ bool FShopEffectAtomicityTest::RunTest(const FString& Parameters)
     FDecreeData* Rule = F.Decrees->FindRow<FDecreeData>(Decree, TEXT("TEST"));
     Rule->PollutionCut = 15;
     Rule->CostEffect.Add(Resource(EShopEffectType::Money, -10));
-    Rule->CostEffect.Add(Resource(EShopEffectType::Psychic, -1000));
+    // Reading supplies 32 psychic in this fixture. The extra 28 is affordable
+    // alone, but base cost 8 + extra cost 28 is not: check the combined cost.
+    Rule->CostEffect.Add(Resource(EShopEffectType::Psychic, -28));
     if (!TestTrue(TEXT("Start"), F.Start()) || !TestTrue(TEXT("Inside"), F.OpenNight(true))) return false;
     if (!TestTrue(TEXT("Read and open calm"), IShopService::Execute_RequestReadSecret(F.Shop.Get(), Secret).bSucceeded)) return false;
     const FRunSnapshot Before = F.Snapshot();
+    TestEqual(TEXT("Candidate affordability trials do not spend money"), Before.Money, F.Rules.StartMoney);
+    TestEqual(TEXT("Candidate affordability trials do not spend psychic"), Before.Psychic, F.Rules.StartPsychic + F.Rules.ReadPsychicGain);
     TestFalse(TEXT("Insufficient aggregate psychic rejects composite cost"), IShopService::Execute_RequestEnactDecree(F.Shop.Get(), Decree).bSucceeded);
     Unchanged(*this, Before, F.Snapshot());
-    TestTrue(TEXT("Rejected candidate stays available"), F.Snapshot().DecreeCandidates.Contains(Decree));
+    TestFalse(TEXT("New candidate policy excludes unaffordable aggregate costs"), F.Snapshot().DecreeCandidates.Contains(Decree));
+    // Exercise the transaction preflight even if an old UI still has the card.
+    // Merely testing an ID excluded above would only cover candidate membership.
+    FShopCatalog StaleCatalog;
+    StaleCatalog.Rules = F.Rules;
+    StaleCatalog.Decrees.Add(Decree, *Rule);
+    FShopRunState StaleState;
+    StaleState.Money = Before.Money;
+    StaleState.Psychic = Before.Psychic;
+    StaleState.Pollution = Before.Pollution;
+    StaleState.DecreeCandidates.Add(Decree);
+    FText StaleError;
+    TestFalse(TEXT("A stale candidate still rechecks the full composite cost"), ShopDecrees::Enact(StaleState, StaleCatalog, Decree, StaleError));
+    TestEqual(TEXT("Rejected stale candidate does not partially deduct money"), StaleState.Money, Before.Money);
+    TestEqual(TEXT("Rejected stale candidate does not partially deduct psychic"), StaleState.Psychic, Before.Psychic);
+    TestEqual(TEXT("Rejected stale candidate does not apply pollution reduction"), StaleState.Pollution, Before.Pollution);
+    TestEqual(TEXT("Rejected stale candidate creates no active decree"), StaleState.Decrees.Num(), 0);
     TestFalse(TEXT("Unknown decree cannot bypass candidate list"), IShopService::Execute_RequestEnactDecree(F.Shop.Get(), TEXT("TEST_missing")).bSucceeded);
     Unchanged(*this, Before, F.Snapshot());
     TestTrue(TEXT("Can leave calm after failure"), IShopService::Execute_RequestSkipDecree(F.Shop.Get()).bSucceeded);
@@ -414,6 +464,9 @@ bool FShopNegativeDaysResetTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Decrees reset"), Reset.ActiveDecrees.Num(), 0);
     TestEqual(TEXT("Clues reset"), Reset.Clues.Num(), 0);
     TestEqual(TEXT("Starting novel inventory restored"), F.Book(Novel).Stock, 2);
+    TestEqual(TEXT("Starting secret book is restored as owned inventory"), F.Book(Secret).Stock, 1);
+    TestEqual(TEXT("Restart restores the per-copy secret inventory"), F.Book(Secret).SecretCopies.Num(), 1);
+    TestEqual(TEXT("Restart clears per-copy reading progress"), F.Book(Secret).ReadCopies, 0);
     TestEqual(TEXT("Starting secret offers restored"), F.Book(Secret).AvailableToCollect, 1);
     TestFalse(TEXT("Fresh customer unserved"), F.Queue()[0].bServed);
     return true;

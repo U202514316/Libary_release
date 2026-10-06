@@ -1,4 +1,5 @@
 #include "ShopEconomy.h"
+#include "ShopDecrees.h"
 
 #include <cmath>
 
@@ -6,7 +7,7 @@
 
 namespace
 {
-    bool Fail(FText& Error, const FText& Message)
+    bool EconomyFail(FText& Error, const FText& Message)
     {
         Error = Message;
         return false;
@@ -45,45 +46,66 @@ namespace
         return true;
     }
 
-    bool ScaledGain(const FShopRunState& State, EShopEffectType Type, int32 Base, int32& Result, FText& Error)
+    bool ScaledGain(const FShopRunState& State, EShopEffectType Type, int32 Base, int32& Result, FText& Error, bool bNightIncome = false)
     {
-        if (Base < 0) return Fail(Error, LOCTEXT("NegativeGain", "收益配置不能为负数。"));
+        if (Base < 0) return EconomyFail(Error, LOCTEXT("NegativeGain", "收益配置不能为负数。"));
         double Multiplier = 1.0;
         for (const FShopModifier& Modifier : State.Modifiers)
         {
-            if (Modifier.Type != Type || (Modifier.EndTurn >= 0 && State.Turn >= Modifier.EndTurn)) continue;
+            if ((Modifier.Type != Type && !(bNightIncome && Modifier.Type == EShopEffectType::NightIncomeMultiplier)) ||
+                (Modifier.EndTurn >= 0 && State.Turn >= Modifier.EndTurn)) continue;
             if (!std::isfinite(Modifier.Multiplier) || Modifier.Multiplier < 0.f)
-                return Fail(Error, LOCTEXT("InvalidMultiplier", "收益倍率无效。"));
+                return EconomyFail(Error, LOCTEXT("InvalidMultiplier", "收益倍率无效。"));
             Multiplier *= static_cast<double>(Modifier.Multiplier);
-            if (!std::isfinite(Multiplier)) return Fail(Error, LOCTEXT("MultiplierOverflow", "收益倍率超出数值范围。"));
+            if (!std::isfinite(Multiplier)) return EconomyFail(Error, LOCTEXT("MultiplierOverflow", "收益倍率超出数值范围。"));
         }
         const double Scaled = std::floor(static_cast<double>(Base) * Multiplier);
         if (!std::isfinite(Scaled) || Scaled < 0.0 || Scaled > MAX_int32)
-            return Fail(Error, LOCTEXT("GainOverflow", "收益超出整数范围。"));
+            return EconomyFail(Error, LOCTEXT("GainOverflow", "收益超出整数范围。"));
         Result = static_cast<int32>(Scaled);
         return true;
     }
 
-    bool PollutionAfter(const FShopRunState& State, const FRunRules& Rules, int64 Delta, int32& Result, FText& Error)
+    bool AddPollution(FShopRunState& State, const FShopCatalog& Catalog, int64 Delta, FText& Error)
     {
-        if (Rules.PollutionLimit <= 0 || Delta < 0 || State.Pollution < 0)
-            return Fail(Error, LOCTEXT("InvalidPollution", "污染数值或上限配置无效。"));
-        const int64 Sum = static_cast<int64>(State.Pollution) + Delta;
-        if (!FitsInteger(Sum)) return Fail(Error, LOCTEXT("PollutionOverflow", "污染数值超出整数范围。"));
-        Result = static_cast<int32>(Sum);
-        return true;
-    }
-
-    void CommitPollution(FShopRunState& State, const FRunRules& Rules, int32 Pollution)
-    {
-        State.Pollution = Pollution;
-        State.bPollutionLimitReached |= Pollution >= Rules.PollutionLimit;
+        if (Delta < 0 || !FitsInteger(Delta)) return EconomyFail(Error, LOCTEXT("InvalidPollution", "污染增量无效或超出整数范围。"));
+        return ShopEffects::ChangePollution(State, Catalog, static_cast<int32>(Delta), Error);
     }
 
     int32 BookPollution(const FBookData& Book, int32 GlobalValue)
     {
         return Book.PollutionYield == -1 ? GlobalValue : Book.PollutionYield;
     }
+}
+
+void ShopEconomy::RefreshBookCounts(FBookRuntime& Book)
+{
+    Book.Stock = Book.SecretCopies.Num();
+    Book.ReadCopies = 0;
+    Book.bAltered = false;
+    for (const FSecretBookCopy& Copy : Book.SecretCopies)
+    {
+        if (Copy.bRead) ++Book.ReadCopies;
+        Book.bAltered |= Copy.bAltered;
+    }
+}
+
+void ShopEconomy::NormalizeSecretCopies(FBookRuntime& Book)
+{
+    // Compatibility for older in-memory callers. Once a copy list exists, aggregate
+    // fields never overwrite the individual copy flags.
+    if (Book.SecretCopies.IsEmpty() && Book.Stock > 0)
+    {
+        Book.SecretCopies.SetNum(Book.Stock);
+        for (int32 Index = 0; Index < Book.SecretCopies.Num(); ++Index)
+        {
+            FSecretBookCopy& Copy = Book.SecretCopies[Index];
+            Copy.bRead = Index < Book.ReadCopies;
+            Copy.bSealed = true;
+            Copy.bAltered = Book.bAltered;
+        }
+    }
+    RefreshBookCounts(Book);
 }
 
 void ShopEconomy::Reset(FShopRunState& State, const FShopCatalog& Catalog)
@@ -97,12 +119,12 @@ void ShopEconomy::Reset(FShopRunState& State, const FShopCatalog& Catalog)
     for (const auto& Pair : Catalog.Books)
     {
         FBookRuntime Runtime;
+        Runtime.Stock = Pair.Value.InitialStock;
         if (Pair.Value.Layer == EBookLayer::Inside)
         {
-            Runtime.Stock = Pair.Value.InitialOwnedStock;
-            Runtime.AvailableToCollect = Pair.Value.InitialStock;
+            Runtime.AvailableToCollect = Pair.Value.CollectOfferPerNight;
+            NormalizeSecretCopies(Runtime);
         }
-        else Runtime.Stock = Pair.Value.InitialStock;
         State.Inventory.Add(Pair.Key, Runtime);
     }
 }
@@ -114,9 +136,9 @@ bool ShopEconomy::AddMoney(FShopRunState& State, int32 Delta, FText& Error, bool
     const int64 NewIncome = static_cast<int64>(State.TodayIncome) + (Delta > 0 ? static_cast<int64>(Delta) : 0);
     const int64 NewExpense = static_cast<int64>(State.TodayExpense) + (Delta < 0 ? -static_cast<int64>(Delta) : 0);
     if (!FitsInteger(NewMoney) || !FitsInteger(NewIncome) || !FitsInteger(NewExpense))
-        return Fail(Error, LOCTEXT("MoneyOverflow", "资金或当日账目超出整数范围。"));
+        return EconomyFail(Error, LOCTEXT("MoneyOverflow", "资金或当日账目超出整数范围。"));
     if (bRequireFunds && Delta < 0 && NewMoney < 0)
-        return Fail(Error, LOCTEXT("InsufficientMoney", "资金不足。"));
+        return EconomyFail(Error, LOCTEXT("InsufficientMoney", "资金不足。"));
     State.Money = static_cast<int32>(NewMoney);
     State.TodayIncome = static_cast<int32>(NewIncome);
     State.TodayExpense = static_cast<int32>(NewExpense);
@@ -128,10 +150,10 @@ bool ShopEconomy::Restock(FShopRunState& State, const FShopCatalog& Catalog, FNa
     Error = FText::GetEmpty();
     const FBookData* Book = Catalog.Books.Find(BookId);
     FBookRuntime* Runtime = State.Inventory.Find(BookId);
-    if (!Book || !Runtime) return Fail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
+    if (!Book || !Runtime) return EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
     if (!IsTableBook(*Book) || Book->Cost < 0 || !ValidInventory(*Runtime))
-        return Fail(Error, LOCTEXT("CannotRestock", "只有有效的表世界书籍可以补货。"));
-    if (!CanAddStock(State)) return Fail(Error, LOCTEXT("StockOverflow", "库存超出整数范围。"));
+        return EconomyFail(Error, LOCTEXT("CannotRestock", "只有有效的表世界书籍可以补货。"));
+    if (!CanAddStock(State)) return EconomyFail(Error, LOCTEXT("StockOverflow", "库存超出整数范围。"));
     if (!AddMoney(State, -Book->Cost, Error, true)) return false;
     ++Runtime->Stock;
     return true;
@@ -142,19 +164,24 @@ bool ShopEconomy::Collect(FShopRunState& State, const FShopCatalog& Catalog, FNa
     Error = FText::GetEmpty();
     const FBookData* Book = Catalog.Books.Find(BookId);
     FBookRuntime* Runtime = State.Inventory.Find(BookId);
-    if (!Book || !Runtime) return Fail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
+    if (!Book || !Runtime) return EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
     if (!IsInsideBook(*Book) || !ValidInventory(*Runtime))
-        return Fail(Error, LOCTEXT("CannotCollect", "只有有效的里世界密文书可以收取。"));
-    if (Runtime->AvailableToCollect <= 0) return Fail(Error, LOCTEXT("NoOffer", "本晚已没有这本书可供收取。"));
+        return EconomyFail(Error, LOCTEXT("CannotCollect", "只有有效的里世界密文书可以收取。"));
+    if (Runtime->AvailableToCollect <= 0) return EconomyFail(Error, LOCTEXT("NoOffer", "本晚已没有这本书可供收取。"));
     if (Catalog.Rules.CollectPsychicCost < 0 || State.Psychic < Catalog.Rules.CollectPsychicCost)
-        return Fail(Error, LOCTEXT("InsufficientPsychic", "灵力不足或收书消耗配置无效。"));
-    if (!CanAddStock(State)) return Fail(Error, LOCTEXT("StockOverflow", "库存超出整数范围。"));
-    int32 NewPollution;
-    if (!PollutionAfter(State, Catalog.Rules, Catalog.Rules.PollutionOnCollect, NewPollution, Error)) return false;
-    State.Psychic -= Catalog.Rules.CollectPsychicCost;
-    ++Runtime->Stock;
-    --Runtime->AvailableToCollect;
-    CommitPollution(State, Catalog.Rules, NewPollution);
+        return EconomyFail(Error, LOCTEXT("InsufficientPsychic", "灵力不足或收书消耗配置无效。"));
+    if (!CanAddStock(State)) return EconomyFail(Error, LOCTEXT("StockOverflow", "库存超出整数范围。"));
+    FShopRunState Next = State;
+    FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
+    NormalizeSecretCopies(NextBook);
+    if (!AddPollution(Next, Catalog, Catalog.Rules.PollutionOnCollect, Error)) return false;
+    Next.Psychic -= Catalog.Rules.CollectPsychicCost;
+    FSecretBookCopy Copy;
+    Copy.bSealed = true;
+    NextBook.SecretCopies.Add(Copy);
+    --NextBook.AvailableToCollect;
+    RefreshBookCounts(NextBook);
+    State = MoveTemp(Next);
     return true;
 }
 
@@ -163,35 +190,47 @@ bool ShopEconomy::Read(FShopRunState& State, const FShopCatalog& Catalog, FName 
     Error = FText::GetEmpty();
     const FBookData* Book = Catalog.Books.Find(BookId);
     FBookRuntime* Runtime = State.Inventory.Find(BookId);
-    if (!Book || !Runtime) return Fail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
+    if (!Book || !Runtime) return EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
     if (!IsInsideBook(*Book) || !ValidInventory(*Runtime))
-        return Fail(Error, LOCTEXT("CannotRead", "只有有效的里世界密文书可以阅读。"));
-    if (Runtime->Stock <= 0) return Fail(Error, LOCTEXT("NoOwnedBook", "库存中没有这本书。"));
+        return EconomyFail(Error, LOCTEXT("CannotRead", "只有有效的里世界密文书可以阅读。"));
+    if (Runtime->Stock <= 0) return EconomyFail(Error, LOCTEXT("NoOwnedBook", "库存中没有这本书。"));
     if (!Catalog.Rules.bAllowRepeatRead && Runtime->ReadCopies >= Runtime->Stock)
-        return Fail(Error, LOCTEXT("AlreadyRead", "已读完库存中的每一本书。"));
+        return EconomyFail(Error, LOCTEXT("AlreadyRead", "已读完库存中的每一本书。"));
+    FShopRunState Next = State;
+    FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
+    NormalizeSecretCopies(NextBook);
+    int32 CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([](const FSecretBookCopy& Copy) { return !Copy.bRead; });
+    if (CopyIndex == INDEX_NONE && Catalog.Rules.bAllowRepeatRead && !NextBook.SecretCopies.IsEmpty()) CopyIndex = 0;
+    if (CopyIndex == INDEX_NONE) return EconomyFail(Error, LOCTEXT("AlreadyRead", "已读完库存中的每一本书。"));
+    FSecretBookCopy& Copy = NextBook.SecretCopies[CopyIndex];
     int32 PsychicGain;
     const int32 BaseGain = Book->PsychicYield == -1 ? Catalog.Rules.ReadPsychicGain : Book->PsychicYield;
     if (!ScaledGain(State, EShopEffectType::PsychicGainMultiplier, BaseGain, PsychicGain, Error)) return false;
-    const int64 NewPsychic = static_cast<int64>(State.Psychic) + PsychicGain;
+    const int64 NewPsychic = FMath::Min<int64>(Catalog.Rules.PsychicMax, static_cast<int64>(State.Psychic) + PsychicGain);
     const int64 NewEnlighten = static_cast<int64>(State.Enlighten) + Book->EnlightenYield;
-    if (State.Psychic < 0 || State.Enlighten < 0 || Book->EnlightenYield < 0 || !FitsInteger(NewPsychic) || !FitsInteger(NewEnlighten))
-        return Fail(Error, LOCTEXT("ReadOverflow", "阅读收益配置无效或超出整数范围。"));
-    int32 NewPollution;
-    if (!PollutionAfter(State, Catalog.Rules, BookPollution(*Book, Catalog.Rules.PollutionOnRead), NewPollution, Error)) return false;
+    if (Catalog.Rules.PsychicMax <= 0 || State.Psychic < 0 || State.Enlighten < 0 || Book->EnlightenYield < 0 || !FitsInteger(NewPsychic) || !FitsInteger(NewEnlighten))
+        return EconomyFail(Error, LOCTEXT("ReadOverflow", "阅读收益配置无效或超出整数范围。"));
+    const int32 BasePollution = BookPollution(*Book, Catalog.Rules.PollutionOnRead);
+    if (BasePollution < 0 || Catalog.Rules.AlteredBookReadPollution < 0 || Catalog.Rules.ReturnedBookReadPollution < 0)
+        return EconomyFail(Error, LOCTEXT("InvalidReadPollution", "阅读污染配置无效。"));
+    const int64 Pollution = static_cast<int64>(BasePollution) +
+        (Copy.bAltered ? Catalog.Rules.AlteredBookReadPollution : 0) + (Copy.bPolluted ? Catalog.Rules.ReturnedBookReadPollution : 0);
+    if (!AddPollution(Next, Catalog, Pollution, Error)) return false;
     if (!std::isfinite(Catalog.Rules.ClueDropChance) || Catalog.Rules.ClueDropChance < 0.f || Catalog.Rules.ClueDropChance > 1.f)
-        return Fail(Error, LOCTEXT("InvalidClueChance", "线索掉落概率必须在 0 到 1 之间。"));
+        return EconomyFail(Error, LOCTEXT("InvalidClueChance", "线索掉落概率必须在 0 到 1 之间。"));
 
-    State.Psychic = static_cast<int32>(NewPsychic);
-    State.Enlighten = static_cast<int32>(NewEnlighten);
-    if (Runtime->ReadCopies < Runtime->Stock) ++Runtime->ReadCopies;
-    CommitPollution(State, Catalog.Rules, NewPollution);
-    if (!Book->CluePool.IsEmpty() && Catalog.Rules.ClueDropChance > 0.f && State.Random.FRand() < Catalog.Rules.ClueDropChance)
+    Next.Psychic = static_cast<int32>(NewPsychic);
+    Next.Enlighten = static_cast<int32>(NewEnlighten);
+    Copy.bRead = true;
+    RefreshBookCounts(NextBook);
+    if (!Book->CluePool.IsEmpty() && Catalog.Rules.ClueDropChance > 0.f && Next.Random.FRand() < Catalog.Rules.ClueDropChance)
     {
         TArray<FName> Clues = Book->CluePool;
         Clues.Remove(NAME_None);
         Clues.Sort(FNameLexicalLess());
-        if (!Clues.IsEmpty()) State.Clues.AddUnique(Clues[State.Random.RandRange(0, Clues.Num() - 1)]);
+        if (!Clues.IsEmpty()) Next.Clues.AddUnique(Clues[Next.Random.RandRange(0, Clues.Num() - 1)]);
     }
+    State = MoveTemp(Next);
     return true;
 }
 
@@ -202,53 +241,91 @@ EShopActionResult ShopEconomy::Sell(FShopRunState& State, const FShopCatalog& Ca
     FBookRuntime* Runtime = State.Inventory.Find(BookId);
     if (!Book || !Runtime)
     {
-        Fail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
+        EconomyFail(Error, LOCTEXT("UnknownBook", "书籍不存在。"));
         return EShopActionResult::InvalidId;
     }
-    const bool bInsideCustomer = Customer.NeedLayer == EBookLayer::Inside && Customer.Kind == ECustomerKind::Secret && Customer.NeedType == EBookType::Secret;
+    const bool bValidKind = Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry ||
+        Customer.Kind == ECustomerKind::Secret || Customer.Kind == ECustomerKind::Polluted;
+    const bool bInsideCustomer = Customer.NeedLayer == EBookLayer::Inside && bValidKind && Customer.NeedType == EBookType::Secret;
     const bool bTableCustomer = Customer.NeedLayer == EBookLayer::Table &&
-        (Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry || Customer.Kind == ECustomerKind::Polluted) &&
+        (Customer.Kind == ECustomerKind::Normal || Customer.Kind == ECustomerKind::Hurry) &&
         (Customer.NeedType == EBookType::Novel || Customer.NeedType == EBookType::Poem || Customer.NeedType == EBookType::History);
     if (Customer.bServed || (!bInsideCustomer && !bTableCustomer) || !ValidInventory(*Runtime))
     {
-        Fail(Error, LOCTEXT("InvalidCustomer", "顾客已离开或交易数据无效。"));
+        EconomyFail(Error, LOCTEXT("InvalidCustomer", "顾客已离开或交易数据无效。"));
         return EShopActionResult::Rejected;
     }
     if (Runtime->Stock <= 0)
     {
-        Fail(Error, LOCTEXT("NoOwnedBook", "库存中没有这本书。"));
+        EconomyFail(Error, LOCTEXT("NoOwnedBook", "库存中没有这本书。"));
         return EShopActionResult::OutOfStock;
     }
     if (Book->BookType != Customer.NeedType || Book->Layer != Customer.NeedLayer)
     {
-        Fail(Error, LOCTEXT("WrongBook", "这本书不符合顾客的需求。"));
+        EconomyFail(Error, LOCTEXT("WrongBook", "这本书不符合顾客的需求。"));
         return EShopActionResult::WrongBook;
     }
     int32 Income = Book->Price;
-    if (Book->Price < 0 || (bInsideCustomer && !ScaledGain(State, EShopEffectType::IncomeMultiplier, Book->Price, Income, Error)))
+    if (Book->Price < 0 || (bInsideCustomer && !ScaledGain(State, EShopEffectType::IncomeMultiplier, Book->Price, Income, Error, true)))
     {
-        if (Error.IsEmpty()) Fail(Error, LOCTEXT("InvalidPrice", "售价配置无效。"));
+        if (Error.IsEmpty()) EconomyFail(Error, LOCTEXT("InvalidPrice", "售价配置无效。"));
         return EShopActionResult::InvalidConfig;
     }
     if (State.TotalSold < 0 || State.TotalSold == MAX_int32)
     {
-        Fail(Error, LOCTEXT("SoldOverflow", "累计售出数量超出整数范围。"));
+        EconomyFail(Error, LOCTEXT("SoldOverflow", "累计售出数量超出整数范围。"));
         return EShopActionResult::Rejected;
     }
+    if (!std::isfinite(Book->SaleEnlightenChance) || Book->SaleEnlightenChance < 0.f || Book->SaleEnlightenChance > 1.f || Book->SaleEnlightenYield < 0)
+    {
+        EconomyFail(Error, LOCTEXT("InvalidSaleEnlightenment", "售书启蒙收益或概率配置无效。"));
+        return EShopActionResult::InvalidConfig;
+    }
+    FShopRunState Next = State;
+    FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
+    int32 CopyIndex = INDEX_NONE;
     int64 PollutionDelta = bInsideCustomer ? Catalog.Rules.PollutionOnSell : 0;
+    if (bInsideCustomer)
+    {
+        NormalizeSecretCopies(NextBook);
+        CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([](const FSecretBookCopy& Copy) { return Copy.bRead; });
+        if (CopyIndex == INDEX_NONE && !NextBook.SecretCopies.IsEmpty()) CopyIndex = 0;
+        if (CopyIndex == INDEX_NONE) return EShopActionResult::OutOfStock;
+        if (Catalog.Rules.ReturnedBookSellPollution < 0 || Next.LostSecretBooks.Num() == MAX_int32)
+        {
+            EconomyFail(Error, LOCTEXT("InvalidReturnedBook", "返架书污染配置无效或流失记录已满。"));
+            return EShopActionResult::Rejected;
+        }
+        if (NextBook.SecretCopies[CopyIndex].bPolluted) PollutionDelta += Catalog.Rules.ReturnedBookSellPollution;
+    }
     if (PollutionDelta < 0 || ((Customer.bPolluted || Customer.Kind == ECustomerKind::Polluted) && Catalog.Rules.PollutionOnPollutedCustomer < 0))
     {
-        Fail(Error, LOCTEXT("InvalidPollution", "污染数值或上限配置无效。"));
+        EconomyFail(Error, LOCTEXT("InvalidPollution", "污染数值或上限配置无效。"));
         return EShopActionResult::InvalidConfig;
     }
     if (Customer.bPolluted || Customer.Kind == ECustomerKind::Polluted) PollutionDelta += Catalog.Rules.PollutionOnPollutedCustomer;
-    int32 NewPollution;
-    if (!PollutionAfter(State, Catalog.Rules, PollutionDelta, NewPollution, Error)) return EShopActionResult::Rejected;
-    if (!AddMoney(State, Income, Error)) return EShopActionResult::Rejected;
-    --Runtime->Stock;
-    if (Runtime->ReadCopies > 0) --Runtime->ReadCopies;
-    ++State.TotalSold;
-    CommitPollution(State, Catalog.Rules, NewPollution);
+    if (!AddPollution(Next, Catalog, PollutionDelta, Error)) return EShopActionResult::Rejected;
+    if (!AddMoney(Next, Income, Error)) return EShopActionResult::Rejected;
+    if (Book->SaleEnlightenYield > 0 && Book->SaleEnlightenChance > 0.f &&
+        (Book->SaleEnlightenChance >= 1.f || Next.Random.FRand() < Book->SaleEnlightenChance))
+    {
+        const int64 NewEnlighten = static_cast<int64>(Next.Enlighten) + Book->SaleEnlightenYield;
+        if (Next.Enlighten < 0 || !FitsInteger(NewEnlighten))
+        {
+            EconomyFail(Error, LOCTEXT("EnlightenOverflow", "启蒙收益超出整数范围。"));
+            return EShopActionResult::Rejected;
+        }
+        Next.Enlighten = static_cast<int32>(NewEnlighten);
+    }
+    if (bInsideCustomer)
+    {
+        NextBook.SecretCopies.RemoveAt(CopyIndex);
+        RefreshBookCounts(NextBook);
+        Next.LostSecretBooks.Add(BookId);
+    }
+    else --NextBook.Stock;
+    ++Next.TotalSold;
+    State = MoveTemp(Next);
     return EShopActionResult::Sold;
 }
 
@@ -267,9 +344,11 @@ bool ShopEconomy::HasMatchingStock(const FShopRunState& State, const FShopCatalo
 bool ShopEconomy::PayRent(FShopRunState& State, const FRunRules& Rules, FText& Error)
 {
     Error = FText::GetEmpty();
-    if (State.Day <= 0 || Rules.Rent < 0) return Fail(Error, LOCTEXT("InvalidRent", "房租或营业日配置无效。"));
-    if (State.LastRentDay >= State.Day) return Fail(Error, LOCTEXT("RentAlreadyPaid", "今天的房租已结算。"));
-    if (!AddMoney(State, -Rules.Rent, Error)) return false;
+    const int64 Rent = static_cast<int64>(Rules.Rent) + State.RentPenalty;
+    if (State.Day <= 0 || Rules.Rent < 0 || State.RentPenalty < 0 || Rent < 0 || !FitsInteger(Rent))
+        return EconomyFail(Error, LOCTEXT("InvalidRent", "房租或营业日配置无效。"));
+    if (State.LastRentDay >= State.Day) return EconomyFail(Error, LOCTEXT("RentAlreadyPaid", "今天的房租已结算。"));
+    if (!AddMoney(State, -static_cast<int32>(Rent), Error)) return false;
     State.LastRentDay = State.Day;
     return true;
 }

@@ -6,6 +6,10 @@
 /** Value-model operations. The coordinator owns phase checks and commits the run copy. */
 namespace ShopEconomy
 {
+    // SecretCopies is authoritative after conversion. Call RefreshBookCounts directly
+    // after adding/removing copies, especially when removing the last owned copy.
+    LIBARY_RELEASE_API void NormalizeSecretCopies(FBookRuntime& Book);
+    LIBARY_RELEASE_API void RefreshBookCounts(FBookRuntime& Book);
     LIBARY_RELEASE_API void Reset(FShopRunState& State, const FShopCatalog& Catalog);
     LIBARY_RELEASE_API bool AddMoney(FShopRunState& State, int32 Delta, FText& Error, bool bRequireFunds = false);
     LIBARY_RELEASE_API bool Restock(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, FText& Error);

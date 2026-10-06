@@ -48,7 +48,7 @@ void UShopRunSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     Super::Initialize(Collection);
     const UShopSettings* Settings = GetDefault<UShopSettings>();
     ConfigureTables(Settings->Books.LoadSynchronous(), Settings->Customers.LoadSynchronous(), Settings->RunRules.LoadSynchronous(),
-        Settings->Decrees.LoadSynchronous(), Settings->Events.LoadSynchronous(), Settings->MarketItems.LoadSynchronous(), Settings->OwlLines.LoadSynchronous(), Settings->RandomSeed);
+        Settings->Decrees.LoadSynchronous(), Settings->Events.LoadSynchronous(), Settings->MarketItems.LoadSynchronous(), Settings->OwlLines.LoadSynchronous(), Settings->RandomSeed, Settings->Endings.LoadSynchronous());
 }
 
 void UShopRunSubsystem::Deinitialize()
@@ -60,7 +60,7 @@ void UShopRunSubsystem::Deinitialize()
 }
 
 bool UShopRunSubsystem::ConfigureTables(UDataTable* Books, UDataTable* Customers, UDataTable* Rules, UDataTable* Decrees,
-    UDataTable* Events, UDataTable* Market, UDataTable* Owl, int32 Seed)
+    UDataTable* Events, UDataTable* Market, UDataTable* Owl, int32 Seed, UDataTable* Endings)
 {
     if (bCommitting || (State.Phase != EGamePhase::Boot && State.Phase != EGamePhase::End))
     { Reject(EShopActionResult::InvalidPhase, TEXT("只能在开局前或结束后替换配置。")); return false; }
@@ -73,7 +73,8 @@ bool UShopRunSubsystem::ConfigureTables(UDataTable* Books, UDataTable* Customers
         ReadTable(Decrees, Candidate.Decrees, true, TEXT("DT_Decrees"), Error) &&
         ReadTable(Events, Candidate.Events, false, TEXT("DT_Events"), Error) &&
         ReadTable(Market, Candidate.MarketItems, false, TEXT("DT_MarketItems"), Error) &&
-        ReadTable(Owl, Candidate.OwlLines, false, TEXT("DT_Owl"), Error);
+        ReadTable(Owl, Candidate.OwlLines, false, TEXT("DT_Owl"), Error) &&
+        ReadTable(Endings, Candidate.Endings, false, TEXT("DT_Endings"), Error);
     if (!Loaded) { Result(false, EShopActionResult::InvalidConfig, Error); return false; }
     const FRunRules* Default = RuleRows.Find(TEXT("Default"));
     if (!Default) { Reject(EShopActionResult::InvalidConfig, TEXT("DT_RunRules 缺少 Default 行。")); return false; }
@@ -149,7 +150,7 @@ bool UShopRunSubsystem::StartDay(FShopRunState& Next, FText& Error)
     Next.MarketStock.Reset();
     Next.MarketSold.Reset();
     if (!ShopCustomers::Generate(Next, Catalog, EBookLayer::Table, Error)) return false;
-    ShopDecrees::DrawCandidates(Next, Catalog);
+    Next.DecreeCandidates.Reset();
     QueueEvents(Next, EShopEventTrigger::OnDayStart);
     return true;
 }
@@ -160,10 +161,13 @@ FRunSnapshot UShopRunSubsystem::GetSnapshot_Implementation() const
     Out.Day = State.Day; Out.MaxDays = Catalog.Rules.MaxDays; Out.Money = State.Money; Out.Psychic = State.Psychic;
     Out.Pollution = State.Pollution; Out.Enlighten = State.Enlighten; Out.PollutionStage = ShopDecrees::GetStage(State.Pollution, Catalog.Rules);
     Out.TotalStock = ShopEconomy::TotalStock(State); Out.TodayIncome = State.TodayIncome; Out.TodayExpense = State.TodayExpense;
-    Out.TotalSold = State.TotalSold; Out.Rent = Catalog.Rules.Rent; Out.Turn = State.Turn; Out.NegativeDays = State.NegativeDays;
+    Out.TotalSold = State.TotalSold; Out.Rent = Catalog.Rules.Rent + State.RentPenalty; Out.Turn = State.Turn; Out.NegativeDays = State.NegativeDays;
+    Out.PsychicMax = Catalog.Rules.PsychicMax;
     Out.Phase = State.Phase; Out.NightChoice = State.NightChoice; Out.Ending = State.Ending;
     Out.ActiveDecrees = State.Decrees; Out.Clues = State.Clues; Out.DecreeCandidates = State.DecreeCandidates;
     Out.PendingEventId = State.PendingEventId; Out.EndMessage = EndingText(State.Ending);
+    FEndingData EndingData;
+    if (GetEndingInfo(State.Ending, EndingData)) Out.EndMessage = EndingData.Text;
     return Out;
 }
 
@@ -187,7 +191,19 @@ bool UShopRunSubsystem::GetBookRuntime(FName BookId, FBookRuntime& Book) const
 }
 bool UShopRunSubsystem::GetDecreeInfo(FName Id, FDecreeData& Decree) const
 {
+    if (Id == FName(TEXT("emergency_calm"))) { Decree = ShopDecrees::GetFallbackDecree(Catalog.Rules); return true; }
     Decree = FDecreeData(); if (const FDecreeData* Found = Catalog.Decrees.Find(Id)) { Decree = *Found; return true; } return false;
+}
+bool UShopRunSubsystem::CanEnactDecree(FName Id, FText& Reason) const
+{
+    if (State.Phase != EGamePhase::Calm) { Reason = FText::FromString(TEXT("当前不在镇定阶段。")); return false; }
+    return ShopDecrees::CanEnact(State, Catalog, Id, Reason);
+}
+bool UShopRunSubsystem::GetEndingInfo(EShopEnding Ending, FEndingData& Data) const
+{
+    Data = FEndingData();
+    for (const auto& Pair : Catalog.Endings) if (Pair.Value.Ending == Ending) { Data = Pair.Value; return true; }
+    return false;
 }
 bool UShopRunSubsystem::GetMarketItemInfo(FName Id, FMarketItemData& Item) const
 {
@@ -212,6 +228,7 @@ EShopActionResult UShopRunSubsystem::RequestBeginSell_Implementation(int32 Custo
         return Reject(EShopActionResult::InvalidId, TEXT("只能接待当前队首的顾客。" )).Code;
     FShopRunState Next = State;
     const FCustomerRuntime& Customer = Next.Customers[CustomerIndex];
+    if (Customer.bFake) return Reject(EShopActionResult::Unavailable, TEXT("这位顾客不回应交易。可以观察或拒绝，避免污染继续增加。" )).Code;
     if (!ShopEconomy::HasMatchingStock(Next, Catalog, Customer.NeedType, Customer.NeedLayer))
     {
         if (Catalog.Rules.bNoMatchConsumesCustomer)
@@ -331,7 +348,7 @@ FShopCommandResult UShopRunSubsystem::RequestOpenInside_Implementation()
     Next.NightChoice = ENightChoice::Inside; Next.Phase = EGamePhase::Inside;
     if (Catalog.Rules.bRefillSecretOffersEachNight)
         for (const auto& Book : Catalog.Books) if (Book.Value.Layer == EBookLayer::Inside)
-            Next.Inventory.FindChecked(Book.Key).AvailableToCollect = Book.Value.InitialStock;
+            Next.Inventory.FindChecked(Book.Key).AvailableToCollect = Book.Value.CollectOfferPerNight;
     FText Error;
     if (!ShopCustomers::Generate(Next, Catalog, EBookLayer::Inside, Error)) return Result(false, EShopActionResult::InvalidConfig, Error);
     Commit(MoveTemp(Next)); return LastResult;
@@ -402,12 +419,14 @@ FShopCommandResult UShopRunSubsystem::RequestSkipDecree_Implementation()
 
 void UShopRunSubsystem::QueueEvents(FShopRunState& Next, EShopEventTrigger Trigger, FName BookId)
 {
+    if (!Catalog.Rules.bEnableHistory) return;
     ShopStory::QueueEvents(Next, Catalog, Trigger, BookId);
 }
 
 FShopCommandResult UShopRunSubsystem::RequestHistoryChoice_Implementation(EHistoryChoice Choice)
 {
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (!Catalog.Rules.bEnableHistory) return Reject(EShopActionResult::Unavailable, TEXT("历史残页按当前开发范围暂未启用。"));
     if (State.Phase != EGamePhase::History) return Reject(EShopActionResult::InvalidPhase, TEXT("当前没有历史事件。"));
     FShopRunState Next = State; FText Error;
     const FName EventId = Next.PendingEventId;
@@ -463,33 +482,50 @@ bool UShopRunSubsystem::SettleNight(FShopRunState& Next, FText& Error)
 {
     if (Next.LastSettledDay == Next.Day) { Error = FText::FromString(TEXT("今天已经结算。")); return false; }
     const FRunRules& R = Catalog.Rules;
-    if (R.RentTiming == ERentTiming::NightEnd && !ShopEconomy::PayRent(Next, R, Error)) return false;
-    // Fixed order: recurring costs/pollution -> decay -> turn/loopholes -> heavy grace -> bankruptcy sample.
-    const int32 NightMoney = ShopEffects::Sum(Next, EShopEffectType::NightlyMoney);
-    if (!ShopEconomy::AddMoney(Next, NightMoney, Error)) return false;
-    TArray<FShopEffect> NightEffects;
-    FShopEffect Pollution; Pollution.Type = EShopEffectType::Pollution; Pollution.Amount = ShopEffects::Sum(Next, EShopEffectType::NightlyPollution);
-    NightEffects.Add(Pollution);
-    if (!ShopEffects::Apply(Next, Catalog, NightEffects, TEXT("NightSettlement"), -1, false, Error)) return false;
-    const double Decay = static_cast<double>(R.PollutionDecay) * ShopEffects::Multiplier(Next, EShopEffectType::DecayMultiplier);
-    if (!FMath::IsFinite(Decay) || Decay < 0.0 || Decay > MAX_int32) { Error = FText::FromString(TEXT("污染衰减配置溢出。")); return false; }
-    Next.Pollution = FMath::Max(0, Next.Pollution - FMath::FloorToInt(Decay));
+    // A settlement point first ages existing decrees; newly expired loopholes affect this night.
     TArray<FName> Triggered;
     if (!ShopDecrees::TickTurn(Next, Catalog, Triggered, Error)) return false;
-    if (Next.HeavyDueTurn != INDEX_NONE && Next.Turn >= Next.HeavyDueTurn)
+    if (R.RentTiming == ERentTiming::NightEnd && !ShopEconomy::PayRent(Next, R, Error)) return false;
+    const int32 NightMoney = ShopEffects::Sum(Next, EShopEffectType::NightlyMoney);
+    if (!ShopEconomy::AddMoney(Next, NightMoney, Error)) return false;
+    bool bLooseBook = false;
+    for (const auto& Pair : Next.Inventory)
     {
-        if (Next.Pollution >= R.HeavyThreshold && !(R.bGoldSatisfiesHeavyGrace && Next.bGoldDuringHeavyGrace))
-        {
-            FShopEffect Penalty; Penalty.Type = EShopEffectType::Pollution; Penalty.Amount = R.HeavyPenalty;
-            if (!ShopEffects::Apply(Next, Catalog, {Penalty}, TEXT("HeavyGrace"), -1, false, Error)) return false;
-        }
-        Next.HeavyDueTurn = Next.Pollution >= R.HeavyThreshold ? Next.Turn + R.HeavyGraceTurns : INDEX_NONE;
-        Next.bGoldDuringHeavyGrace = false;
+        const FBookData* Book = Catalog.Books.Find(Pair.Key);
+        if (!Book || Book->Layer != EBookLayer::Inside) continue;
+        bLooseBook |= Pair.Value.AvailableToCollect > 0;
+        for (const FSecretBookCopy& Copy : Pair.Value.SecretCopies) bLooseBook |= !Copy.bSealed;
     }
+    int64 Pollution = ShopEffects::Sum(Next, EShopEffectType::NightlyPollution);
+    if (bLooseBook && ShopDecrees::GetStage(Next.Pollution, R) == EPollutionStage::Light &&
+        ShopEffects::Sum(Next, EShopEffectType::BlockLightSpread) <= 0) Pollution += R.LightSpreadPerNight;
+    if (Pollution > MAX_int32 || Pollution < MIN_int32) { Error = FText::FromString(TEXT("夜间污染配置溢出。")); return false; }
+    if (!ShopEffects::ChangePollution(Next, Catalog, static_cast<int32>(Pollution), Error)) return false;
+    const double Decay = static_cast<double>(R.PollutionDecay) * ShopEffects::Multiplier(Next, EShopEffectType::DecayMultiplier);
+    if (!FMath::IsFinite(Decay) || Decay < 0.0 || Decay > MAX_int32) { Error = FText::FromString(TEXT("污染衰减配置溢出。")); return false; }
+    if (Next.SkipDecayNights > 0) --Next.SkipDecayNights;
+    else Next.Pollution = FMath::Max(0, Next.Pollution - FMath::FloorToInt(Decay));
+    Next.Modifiers.RemoveAll([](const FShopModifier& Modifier)
+    { return Modifier.Type == EShopEffectType::NightIncomeMultiplier || Modifier.Type == EShopEffectType::CustomerCountDelta; });
     Next.NegativeDays = Next.Money < 0 ? Next.NegativeDays + 1 : 0;
     Next.LastSettledDay = Next.Day;
     Next.Phase = EGamePhase::NightEnd;
     QueueEvents(Next, EShopEventTrigger::OnNightEnd);
+    return true;
+}
+
+bool UShopRunSubsystem::ResolveHeavyWindow(FShopRunState& Next, FText& Error)
+{
+    const FRunRules& R = Catalog.Rules;
+    if (Next.HeavyDueTurn != INDEX_NONE && Next.Turn >= Next.HeavyDueTurn)
+    {
+        if (Next.Pollution >= R.HeavyThreshold && !(R.bGoldSatisfiesHeavyGrace && Next.bGoldDuringHeavyGrace))
+        {
+            if (!ShopEffects::ChangePollution(Next, Catalog, R.HeavyPenalty, Error)) return false;
+        }
+        Next.HeavyDueTurn = Next.Pollution >= R.HeavyThreshold ? Next.Turn + R.HeavyGraceTurns : INDEX_NONE;
+        Next.bGoldDuringHeavyGrace = false;
+    }
     return true;
 }
 
@@ -523,11 +559,35 @@ void UShopRunSubsystem::CheckEnding(FShopRunState& Next, bool bFinal) const
 {
     const FRunRules& R = Catalog.Rules;
     if (Next.Ending != EShopEnding::None) return;
-    if ((R.bImmediateBankruptcy && Next.Money < 0) || Next.NegativeDays >= R.NegativeDaysToClose) Next.Ending = EShopEnding::Closed;
-    else if (Next.bPollutionLimitReached || Next.Pollution >= R.PollutionLimit) Next.Ending = EShopEnding::PollutionReleased;
-    else if (bFinal)
-        Next.Ending = Next.Enlighten >= R.EnlightenWin && Next.Pollution < R.WinPollutionThreshold && (!R.bReturnRequiresRedeemTarget || Next.Money >= R.RedeemTarget)
-            ? EShopEnding::Returned : EShopEnding::Cycle;
+    if (!Catalog.Endings.IsEmpty())
+    {
+        TArray<FEndingData> Rows; Catalog.Endings.GenerateValueArray(Rows);
+        Rows.Sort([](const FEndingData& A, const FEndingData& B) { return A.Priority < B.Priority; });
+        for (const FEndingData& Row : Rows)
+        {
+            bool bMatch = false;
+            switch (Row.Condition)
+            {
+            case EShopEndingCondition::NegativeBalance:
+                bMatch = (R.bImmediateBankruptcy && Next.Money < 0) || Next.NegativeDays >= Row.NegativeDaysRequired; break;
+            case EShopEndingCondition::PollutionLimit:
+                bMatch = Next.bPollutionLimitReached || Next.Pollution >= Row.PollutionThreshold; break;
+            case EShopEndingCondition::FinalThresholds:
+                bMatch = bFinal && Next.Enlighten >= Row.MinEnlighten && Next.Pollution < Row.MaxPollutionExclusive && (!Row.bRequireMoney || Next.Money >= Row.MinMoney); break;
+            case EShopEndingCondition::FinalFallback: bMatch = bFinal; break;
+            }
+            if (bMatch) { Next.Ending = Row.Ending; break; }
+        }
+    }
+    else
+    {
+        // Compatibility for the older prototype fixtures, which have no ending table.
+        if ((R.bImmediateBankruptcy && Next.Money < 0) || Next.NegativeDays >= R.NegativeDaysToClose) Next.Ending = EShopEnding::Closed;
+        else if (Next.bPollutionLimitReached || Next.Pollution >= R.PollutionLimit) Next.Ending = EShopEnding::PollutionReleased;
+        else if (bFinal)
+            Next.Ending = Next.Enlighten >= R.EnlightenWin && Next.Pollution < R.WinPollutionThreshold && (!R.bReturnRequiresRedeemTarget || Next.Money >= R.RedeemTarget)
+                ? EShopEnding::Returned : EShopEnding::Cycle;
+    }
     if (Next.Ending != EShopEnding::None)
     { Next.Phase = EGamePhase::End; Next.bPendingCalm = false; Next.PendingEvents.Reset(); Next.PendingEventId = NAME_None; Next.ActiveCustomer = INDEX_NONE; }
 }
@@ -536,29 +596,44 @@ void UShopRunSubsystem::DispatchModal(FShopRunState& Next)
 {
     if (Next.Phase == EGamePhase::End || ModalPhase(Next.Phase)) return;
     if (Next.bPendingCalm)
-    { Next.ResumePhase = Next.Phase; Next.Phase = EGamePhase::Calm; Next.bPendingCalm = false; }
-    else if (!Next.PendingEvents.IsEmpty())
+    { Next.ResumePhase = Next.Phase; Next.Phase = EGamePhase::Calm; Next.bPendingCalm = false; ShopDecrees::DrawCandidates(Next, Catalog); }
+    else if (Catalog.Rules.bEnableHistory && !Next.PendingEvents.IsEmpty())
     { Next.ResumePhase = Next.Phase; Next.Phase = EGamePhase::History; Next.PendingEventId = Next.PendingEvents[0]; Next.PendingEvents.RemoveAt(0); }
 }
 
 void UShopRunSubsystem::Commit(FShopRunState&& Next, EShopActionResult Code, FName Id, int32 ResolvedCustomer, bool bNewRun)
 {
     const EPollutionStage OldStage = ShopDecrees::GetStage(State.Pollution, Catalog.Rules);
-    EPollutionStage NewStage = ShopDecrees::GetStage(Next.Pollution, Catalog.Rules);
-    if (NewStage > OldStage || (bNewRun && NewStage != EPollutionStage::Safe))
+    const EPollutionStage PeakStage = ShopDecrees::GetStage(FMath::Max(Next.Pollution, Next.PeakPollutionThisCommand), Catalog.Rules);
+    const bool bStageRise = PeakStage > OldStage;
+    FText Error;
+    // One user action can advance at most one stage point, even if several thresholds
+    // were crossed. Loophole effects in this same transaction cannot recursively tick.
+    if (bStageRise || (bNewRun && PeakStage != EPollutionStage::Safe))
     {
-        if (Catalog.Rules.bStageCrossTriggersLoophole)
+        if (!bNewRun && Catalog.Rules.bAdvanceTurnOnStageRise)
         {
-            FText Error;
-            if (!ShopDecrees::TriggerStageLoophole(Next, Catalog, Error)) { Result(false, EShopActionResult::InvalidConfig, Error); return; }
-            NewStage = ShopDecrees::GetStage(Next.Pollution, Catalog.Rules);
+            TArray<FName> Triggered;
+            if (!ShopDecrees::TickTurn(Next, Catalog, Triggered, Error)) { Result(false, EShopActionResult::InvalidConfig, Error); return; }
         }
         Next.bPendingCalm = true;
     }
+    if (Next.StageResetPending)
+    {
+        // Tide resets the current alert/grace latch to the post-reduction stage. It
+        // never changes the numeric thresholds or clears a reached terminal limit.
+        Next.HeavyDueTurn = INDEX_NONE;
+        Next.bGoldDuringHeavyGrace = false;
+        Next.StageResetPending = false;
+    }
+    if (!ResolveHeavyWindow(Next, Error)) { Result(false, EShopActionResult::InvalidConfig, Error); return; }
+    const EPollutionStage NewStage = ShopDecrees::GetStage(Next.Pollution, Catalog.Rules);
     if (NewStage == EPollutionStage::Heavy && Next.HeavyDueTurn == INDEX_NONE)
     { Next.HeavyDueTurn = Next.Turn + Catalog.Rules.HeavyGraceTurns; Next.bGoldDuringHeavyGrace = false; }
     if (NewStage != EPollutionStage::Heavy) { Next.HeavyDueTurn = INDEX_NONE; Next.bGoldDuringHeavyGrace = false; }
+    Next.PeakPollutionThisCommand = 0;
     CheckEnding(Next);
+    InjectPendingFakeCustomers(Next);
     DispatchModal(Next);
     FShopRunState Before = MoveTemp(State);
     State = MoveTemp(Next);
@@ -566,6 +641,28 @@ void UShopRunSubsystem::Commit(FShopRunState&& Next, EShopActionResult Code, FNa
     Result(Success, Code, FText(), Id);
     TGuardValue<bool> Guard(bCommitting, true);
     Notify(Before, ResolvedCustomer, bNewRun);
+}
+
+void UShopRunSubsystem::InjectPendingFakeCustomers(FShopRunState& Next)
+{
+    const bool bInside = Next.Phase == EGamePhase::Inside || Next.Phase == EGamePhase::InsideSell ||
+        (ModalPhase(Next.Phase) && (Next.ResumePhase == EGamePhase::Inside || Next.ResumePhase == EGamePhase::InsideSell));
+    if (!bInside || Next.PendingFakeCustomers <= 0) return;
+    TArray<FName> Ids; Catalog.Customers.GetKeys(Ids); Ids.Sort(FNameLexicalLess());
+    FName Template;
+    for (FName Id : Ids) if (Catalog.Customers[Id].Kind == ECustomerKind::Normal) { Template = Id; break; }
+    int32 Position = ShopCustomers::Current(Next);
+    Position = Position == INDEX_NONE ? Next.Customers.Num() : Position + 1;
+    const int32 Count = FMath::Min(Next.PendingFakeCustomers, 100);
+    for (int32 Index = 0; Index < Count; ++Index)
+    {
+        FCustomerRuntime Fake;
+        Fake.TemplateId = Template; Fake.Kind = ECustomerKind::Normal; Fake.NeedLayer = EBookLayer::Inside;
+        Fake.NeedType = EBookType::Secret; Fake.bFake = true; Fake.bPolluted = true;
+        Fake.MaxPatience = Fake.Patience = static_cast<float>(FMath::Max(1, Catalog.Rules.FakeCustomerMaxPollution));
+        Next.Customers.Insert(Fake, Position++);
+    }
+    Next.PendingFakeCustomers -= Count;
 }
 
 void UShopRunSubsystem::Notify(const FShopRunState& Before, int32 ResolvedCustomer, bool bNewRun)
@@ -625,7 +722,19 @@ void UShopRunSubsystem::Tick(float DeltaTime)
     FShopRunState Next = State;
     const int32 Current = ShopCustomers::Current(Next);
     if (Current == INDEX_NONE) return;
-    const int32 Expired = ShopCustomers::AdvancePatience(Next, DeltaTime);
+    FCustomerRuntime& Customer = Next.Customers[Current];
+    if (Customer.bFake)
+    {
+        const float Speed = Next.Pollution >= Catalog.Rules.MediumThreshold ? 1.f + Catalog.Rules.PatienceDropRatePolluted : 1.f;
+        Customer.FakePollutionElapsed += FMath::Min(DeltaTime, Customer.Patience / Speed);
+        const double Amount = FMath::FloorToDouble(Customer.FakePollutionElapsed) * Catalog.Rules.FakeCustomerPollutionPerSecond;
+        const int32 Total = static_cast<int32>(FMath::Min(Amount, static_cast<double>(Catalog.Rules.FakeCustomerMaxPollution)));
+        const int32 Delta = FMath::Max(0, Total - Customer.FakePollutionApplied);
+        FText Error;
+        if (!ShopEffects::ChangePollution(Next, Catalog, Delta, Error)) { Result(false, EShopActionResult::InvalidConfig, Error); return; }
+        Customer.FakePollutionApplied = Total;
+    }
+    const int32 Expired = ShopCustomers::AdvancePatience(Next, Catalog.Rules, DeltaTime);
     if (Expired != INDEX_NONE) CompleteCustomer(Next, Expired, EShopActionResult::Expired);
     Commit(MoveTemp(Next), EShopActionResult::Success, NAME_None, Expired);
 }

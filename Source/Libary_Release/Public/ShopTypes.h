@@ -29,7 +29,9 @@ enum class EShopEventTrigger : uint8 { OnRead, OnDayStart, OnNightEnd, Manual };
 UENUM(BlueprintType)
 enum class ERentTiming : uint8 { BeforeDusk, NightEnd };
 UENUM(BlueprintType)
-enum class EShopEffectType : uint8 { Money, Psychic, Pollution, Enlighten, AddClue, RemoveClue, DestroySecretBooks, AlterSecretBook, IncomeMultiplier, PsychicGainMultiplier, DecayMultiplier, NightlyMoney, NightlyPollution, CustomerCountDelta, BlockLightSpread };
+enum class EShopEffectType : uint8 { Money, Psychic, Pollution, Enlighten, AddClue, RemoveClue, DestroySecretBooks, AlterSecretBook, IncomeMultiplier, PsychicGainMultiplier, DecayMultiplier, NightlyMoney, NightlyPollution, CustomerCountDelta, BlockLightSpread, NextPollutionBonus, SpawnFakeCustomer, SkipNightDecay, UnlockSecretBook, PermanentBusinessPenalty, ReturnLostSecretBook, ResetPollutionThresholds, NightIncomeMultiplier };
+UENUM(BlueprintType)
+enum class EShopEndingCondition : uint8 { NegativeBalance, PollutionLimit, FinalThresholds, FinalFallback };
 
 /** Text is presentation only. These typed effects are the executable contract. */
 USTRUCT(BlueprintType)
@@ -53,9 +55,13 @@ struct LIBARY_RELEASE_API FBookData : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) EBookLayer Layer = EBookLayer::Table;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Cost = 10;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Price = 20;
-    // Table books start in inventory. Inside books start as offers requiring collection.
+    // InitialStock is owned inventory for both layers. Collection offers are separate.
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 InitialStock = 0;
+    // Legacy field retained for serialized prototype assets; no longer added to stock.
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 InitialOwnedStock = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 CollectOfferPerNight = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) float SaleEnlightenChance = 0.5f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 SaleEnlightenYield = 0;
     // -1 uses the global rule. A deliberate zero overrides the global rule.
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PsychicYield = -1;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PollutionYield = -1;
@@ -90,9 +96,22 @@ struct LIBARY_RELEASE_API FCustomerRuntime
     UPROPERTY(BlueprintReadOnly) bool bPolluted = false;
     UPROPERTY(BlueprintReadOnly) bool bSecret = false;
     UPROPERTY(BlueprintReadOnly) bool bObserved = false;
+    UPROPERTY(BlueprintReadOnly) bool bFake = false;
+    UPROPERTY(BlueprintReadOnly) float FakePollutionElapsed = 0.f;
+    UPROPERTY(BlueprintReadOnly) int32 FakePollutionApplied = 0;
     UPROPERTY(BlueprintReadOnly) float MaxPatience = 30.f;
     UPROPERTY(BlueprintReadOnly) float Patience = 30.f;
     UPROPERTY(BlueprintReadOnly) EShopActionResult Resolution = EShopActionResult::Unavailable;
+};
+
+USTRUCT(BlueprintType)
+struct LIBARY_RELEASE_API FSecretBookCopy
+{
+    GENERATED_BODY()
+    UPROPERTY(BlueprintReadOnly) bool bRead = false;
+    UPROPERTY(BlueprintReadOnly) bool bSealed = true;
+    UPROPERTY(BlueprintReadOnly) bool bAltered = false;
+    UPROPERTY(BlueprintReadOnly) bool bPolluted = false;
 };
 
 USTRUCT(BlueprintType)
@@ -103,6 +122,7 @@ struct LIBARY_RELEASE_API FBookRuntime
     UPROPERTY(BlueprintReadOnly) int32 AvailableToCollect = 0;
     UPROPERTY(BlueprintReadOnly) int32 ReadCopies = 0;
     UPROPERTY(BlueprintReadOnly) bool bAltered = false;
+    UPROPERTY(BlueprintReadOnly) TArray<FSecretBookCopy> SecretCopies;
 };
 
 USTRUCT(BlueprintType)
@@ -130,7 +150,9 @@ struct LIBARY_RELEASE_API FRunRules : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bAllowEarlyClose = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bWrongBookConsumesCustomer = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bNoMatchConsumesCustomer = true;
-    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 StartPsychic = 24;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) float PatienceDropRatePolluted = 0.3f;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 StartPsychic = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PsychicMax = 100;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 StartPollution = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 StartEnlighten = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 RedeemTarget = 1500;
@@ -153,12 +175,32 @@ struct LIBARY_RELEASE_API FRunRules : public FTableRowBase
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRefillSecretOffersEachNight = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) float ClueDropChance = 0.f;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DecreeCandidateCount = 4;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DecreeCandidateCountLight = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DecreeCandidateCountMedium = 4;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DecreeCandidateCountHeavy = 4;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 DecreeCooldownTurns = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 EmergencyPollutionCut = 5;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 EmergencyMoneyCost = 20;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 LightSpreadPerNight = 2;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 FakeCustomerPollutionPerSecond = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 FakeCustomerMaxPollution = 5;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 AlteredBookReadPollution = 2;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 ReturnedBookReadPollution = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 ReturnedBookSellPollution = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 ReturnedBookFallbackPollution = 5;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PermanentRentPenalty = 10;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PermanentCustomerPenalty = 1;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 MaxRentPenalty = 30;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 MaxCustomerPenalty = 2;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 LoopholeDelayTurns = 2;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 HeavyGraceTurns = 1;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 HeavyPenalty = 15;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bGoldSatisfiesHeavyGrace = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bStageCrossTriggersLoophole = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bAdvanceTurnOnStageRise = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bEnableHistory = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bEnableMarket = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRequireCoreContentCounts = false;
     // Sample content is intentionally incomplete. Enable only after the authored tables arrive.
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRequireFinalContentCounts = false;
 };
@@ -181,6 +223,9 @@ struct LIBARY_RELEASE_API FDecreeData : public FTableRowBase
     // 0 uses the global delay. Each explicit night settlement advances one turn.
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 LoopholeDelay = 0;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 CooldownTurns = 0;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) EPollutionStage MinStage = EPollutionStage::Light;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) EPollutionStage MaxStage = EPollutionStage::Heavy;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bFallback = false;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bEnabled = true;
     UPROPERTY(EditAnywhere, BlueprintReadWrite) FText Text;
 };
@@ -243,6 +288,23 @@ struct LIBARY_RELEASE_API FOwlLine : public FTableRowBase
 };
 
 USTRUCT(BlueprintType)
+struct LIBARY_RELEASE_API FEndingData : public FTableRowBase
+{
+    GENERATED_BODY()
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) EShopEnding Ending = EShopEnding::Cycle;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) EShopEndingCondition Condition = EShopEndingCondition::FinalFallback;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Priority = 4;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 NegativeDaysRequired = 3;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PollutionThreshold = 100;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 MinEnlighten = 60;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 MaxPollutionExclusive = 60;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) bool bRequireMoney = false;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 MinMoney = 1500;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) FText Title;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite) FText Text;
+};
+
+USTRUCT(BlueprintType)
 struct LIBARY_RELEASE_API FRunSnapshot
 {
     GENERATED_BODY()
@@ -250,6 +312,7 @@ struct LIBARY_RELEASE_API FRunSnapshot
     UPROPERTY(BlueprintReadOnly) int32 MaxDays = 0;
     UPROPERTY(BlueprintReadOnly) int32 Money = 0;
     UPROPERTY(BlueprintReadOnly) int32 Psychic = 0;
+    UPROPERTY(BlueprintReadOnly) int32 PsychicMax = 100;
     UPROPERTY(BlueprintReadOnly) int32 Pollution = 0;
     UPROPERTY(BlueprintReadOnly) int32 Enlighten = 0;
     UPROPERTY(BlueprintReadOnly) EPollutionStage PollutionStage = EPollutionStage::Safe;
@@ -299,6 +362,7 @@ struct FShopCatalog
     TMap<FName, FEventData> Events;
     TMap<FName, FMarketItemData> MarketItems;
     TMap<FName, FOwlLine> OwlLines;
+    TMap<FName, FEndingData> Endings;
 };
 
 struct FShopRunState
@@ -308,6 +372,10 @@ struct FShopRunState
     int32 NegativeDays = 0, LastRentDay = 0, LastSettledDay = 0, LastMarketDay = 0;
     int32 ActiveCustomer = INDEX_NONE, OwlTalkCount = 0;
     int32 HeavyDueTurn = INDEX_NONE;
+    int32 PendingPollutionBonus = 0, PendingFakeCustomers = 0, SkipDecayNights = 0;
+    int32 PeakPollutionThisCommand = 0;
+    int32 RentPenalty = 0, CustomerPenalty = 0;
+    bool StageResetPending = false;
     bool bGoldDuringHeavyGrace = false;
     bool bPollutionLimitReached = false;
     bool bPendingCalm = false;
@@ -321,6 +389,7 @@ struct FShopRunState
     TArray<FDecreeRuntime> Decrees;
     TArray<FShopModifier> Modifiers;
     TArray<FName> DecreeCandidates, Clues, PendingEvents, WitnessedEvents, PurchasedItems, MarketStock, MarketSold;
+    TArray<FName> LostSecretBooks;
     FRandomStream Random;
     FRandomStream CosmeticRandom;
 };

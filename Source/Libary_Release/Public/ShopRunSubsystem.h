@@ -50,7 +50,7 @@ public:
     virtual FShopCommandResult RequestCloseMarket_Implementation() override;
 
     UFUNCTION(BlueprintCallable, Category="Bookstore|Config")
-    bool ConfigureTables(UDataTable* Books, UDataTable* Customers, UDataTable* Rules, UDataTable* Decrees, UDataTable* Events = nullptr, UDataTable* Market = nullptr, UDataTable* Owl = nullptr, int32 Seed = -1);
+    bool ConfigureTables(UDataTable* Books, UDataTable* Customers, UDataTable* Rules, UDataTable* Decrees, UDataTable* Events = nullptr, UDataTable* Market = nullptr, UDataTable* Owl = nullptr, int32 Seed = -1, UDataTable* Endings = nullptr);
     UFUNCTION(BlueprintPure, Category="Bookstore|Config") bool ValidateConfig(FText& Error) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Service") FText GetLastError() const { return LastResult.Message; }
     UFUNCTION(BlueprintPure, Category="Bookstore|Service") FShopCommandResult GetLastResult() const { return LastResult; }
@@ -59,6 +59,8 @@ public:
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetDecreeInfo(FName Id, FDecreeData& Decree) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetMarketItemInfo(FName Id, FMarketItemData& Item) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetEventInfo(FName Id, FEventData& Event) const;
+    UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetEndingInfo(EShopEnding Ending, FEndingData& Data) const;
+    UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool CanEnactDecree(FName Id, FText& Reason) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Customers") int32 GetActiveCustomerIndex() const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Customers") FText BuildCustomerNeedText(int32 CustomerIndex) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Inventory") bool HasMatchingStock(EBookType Type, EBookLayer Layer) const;
@@ -100,4 +102,6 @@ private:
     bool SettleNight(FShopRunState& Next, FText& Error);
     bool OpenMarketInternal(FShopRunState& Next, FText& Error);
     void CompleteCustomer(FShopRunState& Next, int32 Index, EShopActionResult Code);
+    bool ResolveHeavyWindow(FShopRunState& Next, FText& Error);
+    void InjectPendingFakeCustomers(FShopRunState& Next);
 };
