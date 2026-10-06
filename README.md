@@ -51,6 +51,8 @@ LogTemp: [CppBridge] Hello, Xingcheng! C++ is working.
 
 ## 程序 A：经营逻辑接入
 
-经营 C++、逐册秘密书、七条律令、表驱动结局及 Release 八张数据表的说明见 [程序 A C++ 接入说明](Docs/程序A_C++接入说明.md)。文档分别列出代码实现、UE 自动生成内容和人工 UI 接线，并提供 UE 5.1 中通过 `ShopPlayerController` / `ShopGameMode` 接入现有根 Widget 的点击步骤。
+经营 C++、逐册秘密书、七条律令、表驱动结局及 Release 八张数据表的说明见 [程序 A C++ 接入说明](Docs/程序A_C++接入说明.md)，也可下载 [程序 A 逻辑完成情况与接口使用指南（Word）](Docs/程序A逻辑完成情况与接口使用指南.docx)。文档分别列出代码实现、UE 自动生成内容和人工 UI 接线，并提供 UE 5.1 中通过 `ShopPlayerController` / `ShopGameMode` 接入现有根 Widget 的点击步骤，以及返回值、回调与按钮前置阶段的注意事项。
 
-Release 目标目录为 `/Game/ProgramA/Release/Data`；备用 Prototype 和以上 Hello 示例保留。当前 Game 目标已编译成功；Editor 编译、Release 资源生成和引用切换尚待关闭编辑器后执行。程序 B 现有 UI 与新接口的接入仍待验收，历史按本轮决定暂缓；集市、夜枭正式内容及 P2 存档不在本轮完成声明中。实际构建、数据生成和测试结果见接入说明末尾记录。
+2026-10-06：Editor 和 Game 目标完整构建均退出码 0；Release 八表已在 `/Game/ProgramA/Release/Data` 生成并通过独立进程校验，项目的八个引用和 Cook 配置已切换。最终 29 项自动化测试全部成功，报告中警告、失败、未运行均为 0，生成时间为 `2026.10.06-10.31.34`。证据见 [最终测试报告](Docs/程序A测试报告_20261006.json) 和接入说明末尾记录。
+
+备用 Prototype 和以上 Hello 示例保留。程序 B 现有 UI 接线、关卡配置、PIE 人工试玩和 Windows 打包仍待验收；历史按本轮决定暂缓，集市、夜枭正式内容及 P2 存档不在本轮完成声明中。

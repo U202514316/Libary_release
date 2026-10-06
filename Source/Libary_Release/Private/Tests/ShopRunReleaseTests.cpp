@@ -2,6 +2,7 @@
 #include "Misc/AutomationTest.h"
 #include "ShopRunSubsystem.h"
 #include "Engine/GameInstance.h"
+#include "Subsystems/SubsystemCollection.h"
 #include "UObject/StrongObjectPtr.h"
 
 namespace ShopRunReleaseTests
@@ -163,6 +164,38 @@ bool FReleaseFakeCustomer::RunTest(const FString&)
     TestTrue(TEXT("Player can dismiss fake"), F.Run->RequestRejectCustomer_Implementation(1).bSucceeded);
     F.Run->Tick(2.f);
     TestEqual(TEXT("Dismissed fake stops emitting pollution"), F.Snapshot().Pollution, PollutionBefore + F.Rules.FakeCustomerPollutionPerSecond);
+    return true;
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FReleaseSettingsInitialization, "Bookstore.ProgramA.ReleaseFlow.ProjectSettingsInitialization", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FReleaseSettingsInitialization::RunTest(const FString&)
+{
+    // Exercise the public subsystem initialization path used by the game. Unlike
+    // the isolated fixtures, this test never calls ConfigureTables itself.
+    TStrongObjectPtr<UGameInstance> Owner(NewObject<UGameInstance>());
+    TStrongObjectPtr<UShopRunSubsystem> Run(NewObject<UShopRunSubsystem>(Owner.Get()));
+    FSubsystemCollection<UGameInstanceSubsystem> Collection;
+    Run->Initialize(Collection);
+    FText Error;
+    const bool bConfigured = TestTrue(TEXT("Project settings load valid release data"), Run->ValidateConfig(Error));
+    if (!bConfigured) { AddError(Error.ToString()); Run->Deinitialize(); return false; }
+    TestEqual(TEXT("Default settings load sixteen real books"), Run->GetBookIds().Num(), 16);
+    TestTrue(TEXT("Start directly from configured settings"), Run->RequestNewRun_Implementation());
+    TestEqual(TEXT("Release starts at zero psychic"), Run->GetSnapshot_Implementation().Psychic, 0);
+    TestEqual(TEXT("Release uses the full calendar"), Run->GetSnapshot_Implementation().MaxDays, 35);
+    FBookData Book; int32 Stock = 0;
+    TestTrue(TEXT("Progressive book is available"), Run->GetBookInfo_Implementation(TEXT("book_novel_03"), Book, Stock));
+    TestEqual(TEXT("Configured sale chance is fifty percent"), Book.SaleEnlightenChance, 0.5f);
+    TestEqual(TEXT("Configured enlightenment reward is two"), Book.SaleEnlightenYield, 2);
+    FBookRuntime Secret;
+    TestTrue(TEXT("Configured owned secret is available"), Run->GetBookRuntime(TEXT("book_secret_01"), Secret));
+    TestEqual(TEXT("Configured initial secret is already owned"), Secret.Stock, 1);
+    for (EShopEnding Ending : { EShopEnding::Closed, EShopEnding::PollutionReleased, EShopEnding::Returned, EShopEnding::Cycle })
+    {
+        FEndingData Data;
+        TestTrue(TEXT("Configured ending table supplies all four endings"), Run->GetEndingInfo(Ending, Data));
+        TestFalse(TEXT("Configured ending text is nonempty"), Data.Text.IsEmpty());
+    }
+    Run->Deinitialize();
     return true;
 }
 #endif

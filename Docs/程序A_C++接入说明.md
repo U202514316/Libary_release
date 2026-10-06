@@ -2,15 +2,15 @@
 
 适用工程：`D:\unreal_project\Libary_release\Libary_Release.uproject`，引擎 UE 5.1，运行时模块 `Libary_Release`。本说明同步至 2026-10-06 本轮用户决定；构建、资产生成和回归的实际结果单列在文末。
 
-本轮已经写入经营、逐册秘密书、顾客、七条律令、结局判定以及 UI 接入用的 C++。Release 数据生成工具依据已有调参表生成 16 本书、4 类顾客、7 条启用律令和 4 个结局。程序 B 已有 UI 资产，但其与这些新接口的连接和实际游玩仍待验收，不能据此宣称整套游戏可以直接玩。
+本轮已经写入经营、逐册秘密书、顾客、七条律令、结局判定以及 UI 接入用的 C++。Editor 和 Game 目标均完整构建成功；Release 八表已生成、独立进程校验通过并切换为项目配置；最终 29 项自动化测试全部成功。程序 B 已有 UI 资产，但其与这些新接口的连接和实际游玩仍待验收，不能据此宣称整套游戏可以直接玩。可下载 [Word 版完成情况与接口使用指南](程序A逻辑完成情况与接口使用指南.docx)，详细证据见文末。
 
 ## 1. 哪些已写成 C++，哪些自动生成，哪些要在 UE 中连接
 
 | 工作 | 当前范围 | 接入时要做什么 |
 | --- | --- | --- |
 | 经营、库存、随机顾客、污染、律令与结局 | C++ 已实现，规则由数据驱动；实际验证见文末 | UI 发命令并显示服务返回的状态，不再自行结算一遍。 |
-| 原生类、接口、结构、枚举 | 编译时由 UE 反射系统注册  | 不用手建同名蓝图接口、结构或枚举。 |
-| Release 八张 DataTable | `ShopReleaseData` 工具负责自动创建；具体落盘和重新加载结果见文末 | 在项目设置核对八个软引用；日常改表使用编辑器，不重复运行创建命令覆盖。 |
+| 原生类、接口、结构、枚举 | 编译时由 UE 反射系统注册 | 不用手建同名蓝图接口、结构或枚举。 |
+| Release 八张 DataTable | 已由 `ShopReleaseData` 创建，独立进程重新加载校验通过，项目引用已切换 | 在项目设置核对八个软引用；日常改表使用编辑器，不重复运行创建命令覆盖。 |
 | `ShopPlayerController` / `ShopGameMode` | C++ 类已写入，包含根控件生命周期和首次开局 | 手工派生两个蓝图、选根 WBP，并在需要的关卡指定 GameMode。工具不会自动改用户地图。 |
 | 根 UI、按钮、库存列表、顾客、镇定与结局面板 | 现有程序 B 资产可继续使用，新接口接入待验收 | 根 WBP 实现原生 `ShopView`，将回调连到现有显示逻辑，将按钮连到服务请求。 |
 | 历史事件 | 通用队列与见证接口保留；按用户决定暂缓接入 | Release 的 `bEnableHistory=false`，事件表为空，本轮不用制作或接通历史面板流程。 |
@@ -43,7 +43,7 @@
 
 `ShopRunSubsystem`、`ShopService`、`ShopView` 及结构、枚举均来自 C++。原生结构和枚举不一定显示成普通 `.uasset`；在变量类型、节点引脚和 DataTable 行结构选择器中查找即可。不要另建同名蓝图类型替代它们。
 
-本轮生成目标是内容浏览器 **Content / ProgramA / Release / Data**，磁盘目录为 `Content/ProgramA/Release/Data`。生成完成后，项目设置的八个引用切换至下表；备用 `Prototype` 不覆盖、不删除。
+本轮八张表已生成在内容浏览器 **Content / ProgramA / Release / Data**，磁盘目录为 `Content/ProgramA/Release/Data`。项目设置的八个引用已切换至下表；备用 `Prototype` 未覆盖、未删除。
 
 | Bookstore 设置项 | 资产路径 | 原生行结构 / 本轮内容 |
 | --- | --- | --- |
@@ -56,7 +56,7 @@
 | Owl Lines | `/Game/ProgramA/Release/Data/DT_Owl` | `FOwlLine`；空，保留原程序 B 接入范围。 |
 | Endings | `/Game/ProgramA/Release/Data/DT_Endings` | `FEndingData`；4 行。 |
 
-打开 **Edit → Project Settings → Game → Bookstore**，核对八个资产选择框。完整软引用还带对象名，例如 `/Game/ProgramA/Release/Data/DT_Books.DT_Books`。项目配置使用 `Config/DefaultGame.ini`；Cook 目录也应包含 `/Game/ProgramA/Release/Data`。不要只改显示文字却留下旧表引用。
+打开 **Edit → Project Settings → Game → Bookstore**，核对八个资产选择框。完整软引用还带对象名，例如 `/Game/ProgramA/Release/Data/DT_Books.DT_Books`。`Config/DefaultGame.ini` 的八个引用已更新，Cook 目录已加入 `/Game/ProgramA/Release/Data`。后续更换数据目录时应同步修改这些配置。
 
 `DT_RunRules` 的行名必须是 `Default`。请求中的 `BookId/DecreeId` 使用 **DataTable 行名**，不是中文显示名，例如 `book_novel`。有独立 `Id` 字段的表可留空，或填同一个行名。已经生成的表不需要重建；`ShopReleaseData` 有拒绝覆盖保护，后续只读检查使用 `-run=ShopReleaseData -VerifyOnly`。
 
@@ -71,11 +71,11 @@
 3. 打开这个蓝图，点 **Class Defaults**，在 Details 搜索 **Root Widget Class**，选择上一步的根 WBP，编译并保存。
 4. 同样从 `ShopGameMode` 派生例如 `BP_ShopGameMode`。打开 **Class Defaults → Classes → Player Controller Class**，设为 `BP_ShopPlayerController`。默认 **Start New Run On First Entry** 开启，仅在状态为 `Boot` 时自动开局。
 5. 打开需要接入的关卡，使用 **Window → World Settings** 打开世界设置，在 **GameMode Override** 选择 `BP_ShopGameMode`，保存关卡。此操作由接入者选择执行，本轮工具不会自动修改现有地图。也可由项目负责人在 **Project Settings → Maps & Modes** 配置默认 GameMode，但不需要两处重复设置。
-6. 根 WBP 初始化时调用 **Get Shop Service**，检查有效并保存返回的 **Shop Run Subsystem Object Reference**。所有 `Request...` 和查询节点的 Target 都连接这个变量；子控件可从根 UI 获取同一个服务。
+6. 根 WBP 的 **Event On Initialized** 调用 **Get Shop Service**，用 **Is Valid** 检查有效并保存返回的 **Shop Run Subsystem Object Reference**。所有 `Request...` 和查询节点的 Target 都连接这个变量；子控件可从根 UI 获取同一个服务。不要把 GameInstance 或根 WBP 自己接作服务 Target。
 7. C++ PlayerController 在 `BeginPlay` 中创建根 WBP、添加到视口并 `RegisterView`，退出时自动注销和移除。采用此路线后，删除或停用现有关卡蓝图、旧 PlayerController、根 WBP 中重复的 **Create Widget / Add to Viewport / Register View / Request New Run** 初始化连线，避免生成两套 UI 或重复开局。
-8. 将按钮连接到第 5 节的请求，失败时显示 `GetLastError` 或命令结果的 `Message`。点击 Play 后核对状态和事件回调，再逐项验收完整流程。
+8. 将按钮连接到第 5 节的请求，立即处理返回的 `bool`、结果枚举或命令结果结构；有错误文本则显示，没有文本时按结果枚举提示。点击 Play 后核对状态和事件回调，再逐项验收完整流程。
 
-`RegisterView` 只接受实现原生 `ShopView` 的对象；原来的自建蓝图接口不会自动收到消息。切换根界面时可调用 PlayerController 的 `Attach Shop View`，由它完成旧视图注销、新视图注册；同样不要再重复手动注册。
+`RegisterView` 只接受实现原生 `ShopView` 的对象；原来的自建蓝图接口不会自动收到消息。切换根界面时可调用 PlayerController 的 `Attach Shop View`，由它完成旧视图注销、新视图注册；同样不要再重复手动注册。这两个函数的失败不会设置对应的 `GetLastError`，应检查对象有效性、是否实现原生接口，以及是否误在回调期间注册。
 
 如果必须保留原 PlayerController，也可以采用旧的手动路线：只创建一次根 WBP → `Get Shop Service` → `Register View(Self)` → 按需开局，根视图销毁时 `Unregister View(Self)`。这条路线与上面的 C++ PlayerController 自动路线二选一，不能同时保留两套创建流程。
 
@@ -88,17 +88,17 @@
 | 原生事件 | 输入参数 | UI 要做的事 |
 | --- | --- | --- |
 | `RefreshShop` | `Snapshot: FRunSnapshot` | 刷新天数、钱、灵能、污染、启蒙、阶段、当日收支等；需要顾客或单本库存时再查询服务。 |
-| `ResolveCustomer` | `CustomerIndex: int32`，`Result: EShopActionResult` | 播放售出、拒绝、无货、选错书或超时的表现，更新队列。 |
-| `NewDay` | `Day: int32` | 更新营业日标题与当天界面。 |
+| `ResolveCustomer` | `CustomerIndex: int32`，`Result: EShopActionResult` | 顾客已完成或离开时播放结果并更新队列；不消费顾客的失败不会发此回调。 |
+| `NewDay` | `Day: int32` | 新开局或天数变化时更新营业日标题；注册视图不会补发，首次显示要读取 `RefreshShop` 的 Day。 |
 | `OpenCalmPanel` | `Candidates: TArray<FName>`，`Snapshot: FRunSnapshot` | 打开镇定界面，用候选 ID 查询律令详情。 |
-| `ShowDecreeResult` | `DecreeId: FName`，`Result: FShopCommandResult` | 显示本次律令操作结果。 |
+| `ShowDecreeResult` | `DecreeId: FName`，`Result: FShopCommandResult` | 显示施行流程的结果；成本不足、不可用、阶段错误等直接返回失败，不保证发此回调，须处理请求返回值。 |
 | `ShowObserveResult` | `CustomerIndex: int32`，`Customer: FCustomerRuntime` | 显示当前顾客的观察结果。 |
 | `ShowHistoryPanel` | `EventId: FName`，`Event: FEventData` | 显示历史文本与当前支持的见证按钮。 |
 | `ShowEnding` | `Ending: EShopEnding`，`Snapshot: FRunSnapshot` | 显示关门、污染释放、归还或循环结局；用 GetEndingInfo 读取结局表的标题与文本。 |
 | `ShowOwlTip` | `LineId: FName`，`Text: FText` | 显示已配置的夜枭台词。 |
 | `OpenMarket` | `ItemIds: TArray<FName>`，`Snapshot: FRunSnapshot` | 用商品 ID 查询详情并生成集市条目。 |
 
-回调中只更新界面和读取快照。C++ 在通知期间会拒绝重入的修改命令，避免“刷新事件又立即购买一次”等递归调用；购买、颁布律令等请求应由后续用户点击发起。
+回调中只更新界面和读取快照。C++ 在通知期间会拒绝重入的修改命令；购买、颁布律令等请求应由后续用户点击发起。回调在请求函数返回前同步执行，注册视图时也会立即刷新；具体接线注意事项见第 5 节。
 
 也可以绑定子系统的 `OnMoneyChanged`、`OnInventoryChanged`、`OnCustomersChanged`、`OnPollutionChanged` 等事件后主动查询。根 UI 用 `ShopView` 接入通常更直观，无需为同一次操作同时维护两套业务状态。
 
@@ -124,7 +124,7 @@
 
 选择错误书籍不改钱和库存。默认 `bWrongBookConsumesCustomer=true`，错误选择仍会让顾客离开；没有匹配库存时是否离开由 `bNoMatchConsumesCustomer` 控制。因此 `WrongBook/NoMatch` 虽然不是交易成功，也可能已经推进顾客队列，UI 应以回调和新快照为准。
 
-顾客索引从 `0` 开始。`GetActiveCustomerIndex=-1` 表示当前未打开选书，不表示没有排队顾客。顾客耐心由 C++ 自动推进，只有队首计时；UI 不要再写第二套倒计时扣减逻辑。
+顾客索引从 `0` 开始。`GetCustomers` 返回的数组含已服务记录，找队首时取第一个 `bServed=false` 的数组索引。`GetActiveCustomerIndex=-1` 表示当前未打开选书，不表示没有排队顾客。顾客耐心由 C++ 自动推进，只有队首计时；UI 不要再写第二套倒计时扣减逻辑。
 
 ### 新增命令
 
@@ -155,9 +155,22 @@
 - `Message`：失败原因等显示文本。成功时可能为空。
 - `SubjectId`：本次涉及的书籍、律令、事件或商品 ID。
 
-旧接口返回 `false` 或失败枚举时，可立即读取 `GetLastError()` 和 `GetLastResult()`。结果表示最近一次命令，UI 应在当前请求返回后及时保存；不要延迟到之后另一个命令执行完才读取。
+修改命令返回 `false` 或失败枚举时，在同一次按钮执行链中立即读取并保存 `GetLastError()` 和 `GetLastResult()`；返回 `FShopCommandResult` 的请求直接保存返回结构。自动耐心 Tick 也会提交 `Success` 并覆盖最近结果，因此不能延迟到下一帧再读。查询函数不更新最近命令结果，查询 `false` 不应显示上一条命令的错误。
 
-其他蓝图查询有 `GetBookIds`、`GetBookRuntime(BookId)`、`GetDecreeInfo(Id)`、`GetMarketItemInfo(Id)`、`GetEventInfo(Id)`、`GetEndingInfo(Ending)`、`BuildCustomerNeedText(CustomerIndex)` 和 `HasMatchingStock(Type, Layer)`。其中 `FBookRuntime` 的 `Stock` 是拥有量，`AvailableToCollect` 是本晚剩余可收取量，`ReadCopies` 是已读册数；秘密书的 `SecretCopies` 保存每册的已读、封存、篡改、污染状态。UI 查询这些副本即可，不应自行改写库存。`GetDecreeInfo` 也支持运行时保底项 `emergency_calm`，无需额外添加第八条律令数据。
+其他蓝图查询有 `GetBookIds`、`GetBookRuntime(BookId)`、`GetDecreeInfo(Id)`、`GetMarketItemInfo(Id)`、`GetEventInfo(Id)`、`GetEndingInfo(Ending)`、`CanEnactDecree(Id, out Reason)`、`BuildCustomerNeedText(CustomerIndex)` 和 `HasMatchingStock(Type, Layer)`。`CanEnactDecree` 返回 `bool` 及不可施行原因，可用于镇定面板按钮禁用与提示；阶段不是 `Calm` 时也会返回 `false`。
+
+`FBookRuntime.Stock` 是拥有量，`AvailableToCollect` 是本晚剩余可收取量，`ReadCopies` 是已读册数；秘密书的 `SecretCopies` 保存每册的已读、封存、篡改、污染状态。UI 查询这些副本即可，不应自行改写库存。`GetDecreeInfo` 也支持运行时保底项 `emergency_calm`，无需额外添加第八条律令数据。
+
+### 返回值与回调的八条接线注意
+
+1. **先用快照初始化，再等阶段事件。** `RegisterView` 成功时立即发送 `RefreshShop`，并补发当前镇定、历史、集市或结局面板；不会补发 `NewDay`。根 UI 可能先收到 `Boot` 快照，再收到自动开局的刷新。
+2. **律令失败不只靠回调。** `ShowDecreeResult` 不能替代 `RequestEnactDecree` 的同步返回值；普通失败分支直接返回错误，不发该回调。
+3. **交易失败不等于顾客没离开。** `WrongBook/NoMatch` 是否消费顾客取决于配置，消费时才发 `ResolveCustomer`；`OutOfStock` 不发。消费型失败的 `Message` 可能为空，应按 `Code` 显示“选错书”或“无匹配库存”，并刷新队列。
+4. **错误在当前执行链中保存。** 不使用 Delay 后再读 `GetLastResult`；自动 Tick 可能已覆盖结果。对结构返回值直接 Break 后保存。查询和视图注册失败则检查各自返回值，不套用旧命令错误。
+5. **律令按钮先查询可施行性。** 用 `CanEnactDecree(Id, out Reason)` 设置按钮状态，显示原因；点击后仍须处理实际请求返回值，不能由 UI 自己扣成本。
+6. **刷新时复用控件。** `RefreshShop`、`OnInventoryChanged`、`OnCustomersChanged` 随每次计时提交触发，可能每帧调用。更新已有文本、条目和耐心条，不要每次重建根 WBP 或整个列表。
+7. **回调中不发修改命令。** 回调同步发生在请求返回前；`RefreshShop/OpenCalmPanel` 内只显示和查询。后续用户点击才可购买、颁布或结束一天，避免被重入保护拒绝。
+8. **重新获取顾客索引和最终阶段。** 进入里店或插入假顾客后重新取得数组，避免缓存旧索引。成功售书、阅读或夜结也可能转入 `Calm/End`，按钮与面板以最新 `Snapshot.Phase` 为准，不能强行切回预想阶段。
 
 默认由项目设置加载配置。需要测试另一组表时，可在 `Boot/End` 调用 `ConfigureTables(Books, Customers, Rules, Decrees, Events, Market, Owl, Seed, Endings)`，再调用 `ValidateConfig` 查看输出错误。进行中的一局不能替换配置；编辑了 DataTable 后，重新启动 PIE 会重新加载，单独点击“新一局”使用的是当前已加载的配置副本。
 
@@ -280,16 +293,18 @@ UI 最短验收链路：所选 GameMode / PlayerController 启动 → 根 WBP �
 
 ## 本轮实际验证记录
 
-2026-10-06 本轮实际状态：
+2026-10-06 本轮实际结果如下。自动化报告生成时间为 `2026.10.06-10.31.34`，以本轮最终报告为准。
 
 | 验证项 | 结果 |
 | --- | --- |
-| `Libary_Release Win64 Development` | 最新运行时代码完整编译、链接成功，退出码 0。日志：`Saved/Logs/ProgramA_Release_GameBuild.log`。这不是 Editor 目标或打包验收。 |
-| 自动化测试源码 | 共 28 项，已随 Game 目标通过编译；本轮尚未运行。涵盖初始已拥有、逐册库存、50% 售卖随机、昼夜顾客池、律令生命周期及反噬、假顾客和 35 天结局。 |
-| `Libary_ReleaseEditor` | 等待用户保存并关闭正在占用该项目的 UE 编辑器，尚未执行本轮完整编译。 |
-| Release 八表 | 生成器源码已完成；尚未执行资源创建、独立进程重载或 Release 回归测试。当前不能把目标目录当作已落盘资源。 |
-| 项目数据引用 | `DefaultGame.ini` 仍保留 Prototype 引用；将在 Release 八表成功生成并验证后切换，避免提前指向不存在的资产。 |
+| `Libary_Release Win64 Development` | 完整编译、链接成功，退出码 0。日志：[ProgramA_Usage_GameBuild_Final.log](../Saved/Logs/ProgramA_Usage_GameBuild_Final.log)。 |
+| `Libary_ReleaseEditor Win64 Development` | 完整编译、链接成功，退出码 0。日志：[ProgramA_Usage_EditorBuild_Final.log](../Saved/Logs/ProgramA_Usage_EditorBuild_Final.log)。 |
+| `Bookstore.ProgramA` 自动化测试 | 29 项全部成功；`succeeded=29`、`succeededWithWarnings=0`、`failed=0`、`notRun=0`、`inProcess=0`。报告：[index.json](程序A测试报告_20261006.json)；日志：[ProgramA_Usage_Tests_Final.log](../Saved/Logs/ProgramA_Usage_Tests_Final.log)。 |
+| Release 八表 | 已实际创建全部八个 `.uasset`；独立新进程 `-run=ShopReleaseData -VerifyOnly` 重新加载并校验成功。日志：[生成](../Saved/Logs/ProgramA_Usage_CreateData.log)、[独立校验](../Saved/Logs/ProgramA_Usage_VerifyData.log)。 |
+| 项目数据引用 | `DefaultGame.ini` 八个表引用已全部切换至 Release，Cook 目录已加入 `/Game/ProgramA/Release/Data`，Prototype 备用目录保留。真实项目设置初始化路径已纳入第 29 项回归。 |
 | Git LFS | `.gitattributes` 与本地 LFS hooks 已配置；没有迁移既有提交历史，也没有提交或推送本轮变更。 |
 | UI、地图和包体 | 新 C++ GameMode/PlayerController 已编译；人工界面连接、关卡指定、PIE 试玩与 Windows 打包尚未验收。 |
 
-下一步顺序：关闭编辑器 → 完整编译 Editor 目标 → `ShopReleaseData` 创建八表 → 新进程 `-VerifyOnly` → 切换八个配置引用及 Cook 目录 → 执行 28 项自动化测试并修复失败项 → 按第 3 节接入 UI 和关卡 → 人工试玩及打包。不能将旧报告目录内之前的测试结果当成本轮 28 项结果。
+第 29 项测试为 `Bookstore.ProgramA.ReleaseFlow.ProjectSettingsInitialization`，覆盖从项目设置加载八张 Release 表并初始化服务。原有 `ConfigRejectsInvalidData` 还增加了 `UnlockSecretBook` 负数量和 `ReturnLostSecretBook` 非法目标的校验断言；相关源代码修复已通过本轮最终回归。其余测试覆盖初始已拥有库存、逐册读售、50% 售卖随机、昼夜顾客池、律令生命周期及反噬、假顾客和 35 天结局等逻辑。
+
+剩余验收是按第 3 节连接根 WBP、指定关卡 GameMode，进行 PIE 人工试玩及 Windows 打包。上述 C++、数据和自动化结果不能替代 UI 点击、画面表现或包体验收；历史、集市、夜枭与 P2 存档的范围仍按第 9 节执行。

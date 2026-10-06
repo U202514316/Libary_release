@@ -77,3 +77,6 @@ DerivedDataCache/*
 # Unreal Engine generated directories
 Platforms/
 .idea/
+
+# Microsoft Office temporary lock files
+~$*
