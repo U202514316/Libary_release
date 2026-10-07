@@ -908,6 +908,38 @@ namespace
                 TEXT("Opening/closing merchant UI does not buy anything, settle the night or mutate business state"));
         }
 
+        bool VerifyMainMenuArtwork()
+        {
+            UUserWidget* Menu=Page(TEXT("MenuPage"));
+            UImage* Background=Child<UImage>(Menu,TEXT("Background"));
+            UTexture2D* Composition=Background?Cast<UTexture2D>(Background->Brush.GetResourceObject()):nullptr;
+            if (!Report.Check(Composition && Composition->GetPathName()==TEXT("/Game/ProgramA/UI/Art/MainMenu/T_MainMenuComposition.T_MainMenuComposition") &&
+                Composition->Source.GetSizeX()==1920 && Composition->Source.GetSizeY()==1080 && !Composition->VirtualTextureStreaming &&
+                Background->GetVisibility()==ESlateVisibility::HitTestInvisible,
+                TEXT("Main menu uses the full unmodified 1920x1080 supplied composition without blocking clicks"))) return false;
+            const TCHAR* Names[]={TEXT("BtnStart"),TEXT("BtnQuit")};
+            const TCHAR* ArtNames[]={TEXT("T_MainMenuStart"),TEXT("T_MainMenuQuit")};
+            const FVector2D Positions[]={FVector2D(1283,369),FVector2D(1359,593)};
+            const FVector2D Sizes[]={FVector2D(317,112),FVector2D(317,113)};
+            for (int32 I=0;I<2;++I)
+            {
+                UButton* Button=Child<UButton>(Menu,Names[I]);
+                UCanvasPanelSlot* Slot=Button?Cast<UCanvasPanelSlot>(Button->Slot):nullptr;
+                UTexture2D* Art=Button?Cast<UTexture2D>(Button->WidgetStyle.Hovered.GetResourceObject()):nullptr;
+                if (!Report.Check(Button && Slot && Slot->GetPosition().Equals(Positions[I]) && Slot->GetSize().Equals(Sizes[I]) &&
+                    Button->GetContent()==nullptr && Button->WidgetStyle.Normal.DrawAs==ESlateBrushDrawType::NoDrawType &&
+                    Art && Art->GetName()==ArtNames[I] && Button->GetIsEnabled() && Button->OnClicked.IsBound() && Button->OnHovered.IsBound(),
+                    FString::Printf(TEXT("Original %s button keeps its live click/audio delegates and exact supplied image hit area"),Names[I]))) return false;
+            }
+            for (const TCHAR* Name:{TEXT("PageShade"),TEXT("HeadingPanel"),TEXT("PageTitle"),TEXT("PageSubtitle"),TEXT("MenuPanel"),TEXT("MenuStory"),TEXT("Feedback")})
+            {
+                UWidget* Old=Menu->WidgetTree->FindWidget(Name);
+                if (!Report.Check(Old && Old->GetVisibility()==ESlateVisibility::Collapsed,TEXT("Generated menu overlay is hidden: ")+FString(Name))) return false;
+            }
+            return Report.Check(ShopUIPreview::Save(Root.Get(),TEXT("main_menu_artwork")),TEXT("Render supplied menu at 1080p")) &&
+                Report.Check(ShopUIPreview::Save(Root.Get(),TEXT("main_menu_artwork_720p"),FIntPoint(1280,720)),TEXT("Render supplied menu at 720p"));
+        }
+
         bool Tutorial(EGamePhase BeforePhase = EGamePhase::Boot, EGamePhase BusinessPhase = EGamePhase::Day)
         {
             const int32 BeforeDay = Snapshot().Day;
@@ -1588,6 +1620,21 @@ int32 UShopUIVerifyCommandlet::Main(const FString& Params)
     UWorld* Entry = Load<UWorld>(AssetRoot + TEXT("Maps/L_BookstoreUI"));
     bAssetsReady &= Report.Check(Entry && Entry->GetOutermost()->HasAnyPackageFlags(PKG_ContainsMap), TEXT("Saved entry .umap loads as a map package"));
     UWidgetBlueprint* Root = Load<UWidgetBlueprint>(AssetRoot + TEXT("WBP_UIRoot"));
+    if(FParse::Param(*Params,TEXT("MainMenuOnly")))
+    {
+        {
+            FSession Menu(Report); Menu.PreviewPrefix=TEXT("main_menu_flow");
+            if (bAssetsReady && Menu.Start(PC->GeneratedClass,Root->GeneratedClass,false))
+            {
+                if (!Menu.VerifyMainMenuArtwork() || !Menu.Tutorial()) Report.Note(TEXT("Main-menu scenario stopped at first failure."));
+            }
+        }
+        Report.Note(FString::Printf(TEXT("MAIN MENU RESULT checks=%d failures=%d"),Report.Checks,Report.Failures));
+        const FString Folder=FPaths::ProjectSavedDir()/TEXT("UIBuild/MainMenuArtwork");
+        IFileManager::Get().MakeDirectory(*Folder,true);
+        FFileHelper::SaveStringToFile(Report.Lines,*(Folder/TEXT("Verification.txt")),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+        return Report.Failures?1:0;
+    }
     if(FParse::Param(*Params,TEXT("AudioOnly")))
     {
         {

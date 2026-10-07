@@ -2,6 +2,7 @@
 #include "ShopUIAuthoring.h"
 #include "ShopUILayout.h"
 #include "ShopProgressionUpgrade.h"
+#include "ShopMainMenuAuthoring.h"
 #include "ShopEndingAuthoring.h"
 #include "ShopAudioAuthoring.h"
 #include "ShopUIData.h"
@@ -457,7 +458,10 @@ namespace
         Label(BP,C,TEXT("MenuStory"),TEXT("一家书店，两种秩序。\n\n白天，为来客寻找合适的书。\n夜晚，在进货与秘密之间做出选择。\n\n售出秘密书能够获利，污染也会随之增长。"),1140,340,580,310,27);
         Place(C,Button(BP,TEXT("BtnStart"),TEXT("开始游戏")),1150,690,560,70,4);
         Place(C,Button(BP,TEXT("BtnQuit"),TEXT("退出游戏")),1150,785,560,60,4);
-        Require(Compile(BP),TEXT("Menu skeleton")); FlowAction(BP,TEXT("BtnStart"),TEXT("ShowTutorial")); Quit(BP,TEXT("BtnQuit")); Finish(BP); return BP;
+        Require(Compile(BP),TEXT("Menu skeleton")); FlowAction(BP,TEXT("BtnStart"),TEXT("ShowTutorial")); Quit(BP,TEXT("BtnQuit"));
+        if(FPackageName::DoesPackageExist(UIAssetRoot+TEXT("Art/MainMenu/T_MainMenuComposition")))
+            Require(ShopMainMenuAuthoring::Apply(BP),TEXT("Apply supplied main-menu presentation"));
+        Finish(BP); return BP;
     }
     UWidgetBlueprint* Tutorial()
     {
@@ -900,6 +904,7 @@ UShopUIBuildCommandlet::UShopUIBuildCommandlet()
 int32 UShopUIBuildCommandlet::Main(const FString& Params)
 {
     FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("UMGEditor"));
+    if(FParse::Param(*Params,TEXT("UpgradeMainMenuArtwork"))) return ShopMainMenuAuthoring::UpgradeProject()?0:1;
     if(FParse::Param(*Params,TEXT("Restore35Days"))) return ShopUIData::Restore35Days()?0:1;
     if(FParse::Param(*Params,TEXT("RestorePsychicArtwork"))) return ShopUILayout::RestorePsychicProject()?0:1;
     if(FParse::Param(*Params,TEXT("UpgradeFiveEndings"))) return ShopEndingAuthoring::UpgradeProject()?0:1;

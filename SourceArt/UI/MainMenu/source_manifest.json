@@ -1,0 +1,121 @@
+{
+  "archive": "D:\\qqdownloads\\开平.zip",
+  "archiveSHA256": "13b86213f1868466af5cd14993fce1bc9c9ad608efafac25bc75559ab328c46a",
+  "files": [
+    {
+      "source": "开平/开始.png",
+      "file": "SourceArt/UI/MainMenu/Original/开始.png",
+      "sha256": "7540110f4f4a2fd64d28f804343021f38f344133254a8ee0f82ab4d09717dbb3",
+      "size": [
+        317,
+        112
+      ],
+      "mode": "RGBA",
+      "alphaBounds": [
+        0,
+        0,
+        317,
+        112
+      ]
+    },
+    {
+      "source": "开平/画板 2.png",
+      "file": "SourceArt/UI/MainMenu/Original/画板 2.png",
+      "sha256": "5ea09d003336c71209e35aaaa2c65f239816f793ea92be10a935ab71716f5675",
+      "size": [
+        1920,
+        1080
+      ],
+      "mode": "RGBA",
+      "alphaBounds": [
+        0,
+        0,
+        1920,
+        1080
+      ]
+    },
+    {
+      "source": "开平/矩形 26.png",
+      "file": "SourceArt/UI/MainMenu/Original/矩形 26.png",
+      "sha256": "a589d5b258d523fb49e96918974a406f2fb531efed4ee9979cfee1019e529d0f",
+      "size": [
+        549,
+        866
+      ],
+      "mode": "RGBA",
+      "alphaBounds": [
+        0,
+        0,
+        549,
+        866
+      ]
+    },
+    {
+      "source": "开平/组 14.png",
+      "file": "SourceArt/UI/MainMenu/Original/组 14.png",
+      "sha256": "d878e1a1a482214be9734559319f07d74cf1f131f498fa0a9008d80f4ff4f369",
+      "size": [
+        688,
+        674
+      ],
+      "mode": "RGBA",
+      "alphaBounds": [
+        0,
+        0,
+        688,
+        674
+      ]
+    },
+    {
+      "source": "开平/退出.png",
+      "file": "SourceArt/UI/MainMenu/Original/退出.png",
+      "sha256": "6c16719a1e2dae03fd30176a4d65f00db534b219d88bb962afe944b8371d35d9",
+      "size": [
+        317,
+        113
+      ],
+      "mode": "RGBA",
+      "alphaBounds": [
+        0,
+        0,
+        317,
+        113
+      ]
+    }
+  ],
+  "presentation": {
+    "designSize": [
+      1920,
+      1080
+    ],
+    "composition": "/Game/ProgramA/UI/Art/MainMenu/T_MainMenuComposition",
+    "useFullComposition": true,
+    "sourceImagesModified": false,
+    "buttons": {
+      "BtnStart": {
+        "rect": [
+          1283,
+          369,
+          317,
+          112
+        ],
+        "action": "ShowTutorial",
+        "hoverArt": "T_MainMenuStart"
+      },
+      "BtnQuit": {
+        "rect": [
+          1359,
+          593,
+          317,
+          113
+        ],
+        "action": "QuitGame",
+        "hoverArt": "T_MainMenuQuit"
+      }
+    },
+    "supplementalAssets": [
+      "T_MainMenuCharacter",
+      "T_MainMenuLogo"
+    ]
+  }
+}
