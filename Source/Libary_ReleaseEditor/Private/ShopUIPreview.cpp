@@ -185,7 +185,11 @@ bool ShopUIPreview::Save(UUserWidget* Root, const FString& Name, FIntPoint Resol
     // A real viewport owns this reference during play. Keep it alive here as well,
     // otherwise the temporary offscreen window releases all Slate geometry on return.
     const TSharedRef<SWidget> SlateRoot = Root->TakeWidget();
-    Renderer.DrawWidget(Target.Get(), SlateRoot, FVector2D(Width, Height), 0.0f, false);
+    // UE 5.1 ScaleBox computes its prepass scale from the previous paint geometry.
+    // Settle nested layout after a resolution/tab/scroll change before capturing;
+    // zero delta does not advance any game or customer timers.
+    for (int32 LayoutPass=0;LayoutPass<3;++LayoutPass)
+        Renderer.DrawWidget(Target.Get(), SlateRoot, FVector2D(Width, Height), 0.0f, false);
     FlushRenderingCommands();
     const bool TextFits = CheckTextBounds(Root, Name);
     FTextureRenderTargetResource* Resource = Target->GameThread_GetRenderTargetResource();

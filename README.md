@@ -2,7 +2,9 @@
 
 ## 当前入口与完成状态（2026-10-07）
 
-UE 5.1 打开 `/Game/ProgramA/UI/Maps/L_BookstoreUI`，点击 **Play** 即可运行。当前为 19 个可编辑 UMG 控件蓝图，位于 `/Game/ProgramA/UI`；业务由 C++ `ShopRunSubsystem`统一执行。没有生成或打包 exe。
+UE 5.1 打开 `/Game/ProgramA/UI/Maps/L_BookstoreUI`，点击 **Play** 即可运行。当前为 20 个可编辑 UMG 控件蓝图，位于 `/Game/ProgramA/UI`；业务由 C++ `ShopRunSubsystem`统一执行。没有生成或打包 exe。
+
+**邮箱猫头鹰与游戏介绍（2026-10-07）：**白天表书店的邮箱上新增缩小的透明猫头鹰立绘，点击打开 `WBP_GameGuide`，可切换“结局条件”与“律令与污染”，滚轮查看全文，点击关闭或按 Esc 返回。条件和数值读取当前运行的数据。阅读期间暂停顾客到场、耐心和伪装顾客污染计时，关闭后从原剩余时间继续，音乐继续播放。60 项自动化测试及 322 项界面检查通过，真实 PIE 验证耐心 29.25 秒在阅读后仍为 29.25 秒，恢复运行 0.5 秒后为 28.75 秒。说明和证据见 `Saved/UIBuild/OwlGameGuide/DeliveryAudit.json` 与下方使用说明。
 
 **开屏已替换为用户提供的 UI（2026-10-07）：**`WBP_MainMenu` 使用《开平.zip》中的完整 1920×1080 原图，并将原有开始／退出按钮的点击区域对齐到图中文字。独立按钮图片用于悬停与按下；原图、人物和标志资源保存在 `SourceArt/UI/MainMenu` 及 `UI/Art/MainMenu`。原有按钮事件、音效及 35 天经营规则保留。306 项界面检查通过，1080p 渲染与原图逐像素一致，720p 显示正常；真实编辑器 PIE 自动化通过“开始 → 十句猫头鹰引导 → 第 1 天”及“退出 → 结束 PIE”。验证调用实际已保存按钮的事件，未做人工鼠标点击或 exe 打包测试。记录见 `Saved/UIBuild/MainMenuArtwork/DeliveryAudit.json`。
 

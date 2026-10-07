@@ -3,6 +3,7 @@
 
 #include "ShopGameMode.h"
 #include "ShopPlayerController.h"
+#include "ShopGameGuideWidget.h"
 #include "ShopAudioComponent.h"
 #include "ShopAudioPalette.h"
 #include "ShopAudioLibrary.h"
@@ -60,7 +61,7 @@ namespace
         TEXT("WBP_MainMenu"), TEXT("WBP_OwlTutorial"), TEXT("WBP_SurfaceShop"), TEXT("WBP_Bookshelf"), TEXT("WBP_DaySettlement"),
         TEXT("WBP_NightChoice"), TEXT("WBP_Merchant"), TEXT("WBP_InsideShop"), TEXT("WBP_Decree"),
         TEXT("WBP_NightSettlement"), TEXT("WBP_Ending"), TEXT("WBP_UIRoot"),
-        TEXT("Components/WBP_BlackMarketBookCard"), TEXT("WBP_HistoryFragment"), TEXT("WBP_BlackMarket"), TEXT("WBP_DecreeIntroduction")
+        TEXT("Components/WBP_BlackMarketBookCard"), TEXT("WBP_HistoryFragment"), TEXT("WBP_BlackMarket"), TEXT("WBP_DecreeIntroduction"), TEXT("WBP_GameGuide")
     };
 
     struct FReport
@@ -908,6 +909,44 @@ namespace
                 TEXT("Opening/closing merchant UI does not buy anything, settle the night or mutate business state"));
         }
 
+        bool VerifyGameGuideArtwork()
+        {
+            UUserWidget* Shop=Page(TEXT("ShopPage"));
+            UImage* Owl=Child<UImage>(Shop,TEXT("MailboxOwlPortrait"));
+            UButton* Hit=Child<UButton>(Shop,TEXT("BtnOwlGuide"));
+            UTexture2D* Texture=Owl?Cast<UTexture2D>(Owl->Brush.GetResourceObject()):nullptr;
+            if (!Report.Check(Texture && Texture->Source.GetSizeX()==512 && Texture->Source.GetSizeY()==512 &&
+                Texture->GetName()==TEXT("T_OwlPerched") && Hit && Hit->OnClicked.IsBound() && Hit->OnHovered.IsBound(),TEXT("Mailbox owl uses the original transparent portrait and a saved interactive button"))) return false;
+            if (!Report.Check(ShopUIPreview::Save(Root.Get(),TEXT("owl_mailbox_scene")),TEXT("Render owl standing on mailbox at 1080p")) ||
+                !Report.Check(ShopUIPreview::Save(Root.Get(),TEXT("owl_mailbox_scene_720p"),FIntPoint(1280,720)),TEXT("Render mailbox at 720p"))) return false;
+            if (!Report.Check(Controller->GameGuideWidgetClass!=nullptr,TEXT("Saved controller references editable WBP_GameGuide"))) return false;
+            TStrongObjectPtr<UShopGameGuideWidget> Guide(CreateWidget<UShopGameGuideWidget>(Controller,Controller->GameGuideWidgetClass));
+            if (!Report.Check(Guide.IsValid(),TEXT("Create actual saved game guide class"))) return false;
+            const TSharedRef<SWidget> SlateGuide=Guide->TakeWidget();
+            if (!Report.Check(Run->IsRealtimePaused() && !Root->GetIsEnabled(),TEXT("Guide lifecycle pauses realtime and blocks background UI"))) return false;
+            UWidgetSwitcher* Tabs=Child<UWidgetSwitcher>(Guide.Get(),TEXT("GuidePages"));
+            if (!Report.Check(Tabs && Tabs->GetChildrenCount()==2 && Tabs->GetActiveWidgetIndex()==0,TEXT("Guide has separate endings and pollution tabs"))) return false;
+            for(int32 Section=0;Section<10;++Section)
+            {
+                UTextBlock* Title=Child<UTextBlock>(Guide.Get(),FName(*FString::Printf(TEXT("GuideSection%dTitle"),Section)));
+                UTextBlock* Body=Child<UTextBlock>(Guide.Get(),FName(*FString::Printf(TEXT("GuideSection%dBody"),Section)));
+                if (!Report.Check(Title && Body && Title->TextDelegate.IsBound() && Body->TextDelegate.IsBound() &&
+                    !Title->TextDelegate.Execute().IsEmpty() && !Body->TextDelegate.Execute().IsEmpty(),FString::Printf(TEXT("Guide section %d reads current data through saved bindings"),Section))) return false;
+            }
+            if (!Report.Check(ShopUIPreview::Save(Guide.Get(),TEXT("owl_guide_endings")),TEXT("Render ending conditions")) ||
+                !Report.Check(ShopUIPreview::Save(Guide.Get(),TEXT("owl_guide_endings_720p"),FIntPoint(1280,720)),TEXT("Render ending text at 720p"))) return false;
+            Child<UScrollBox>(Guide.Get(),TEXT("EndingsScroll"))->ScrollToEnd();
+            if (!Report.Check(ShopUIPreview::Save(Guide.Get(),TEXT("owl_guide_endings_bottom")),TEXT("Render true and redeemed endings at scroll bottom"))) return false;
+            Child<UButton>(Guide.Get(),TEXT("BtnPollution"))->OnClicked.Broadcast();
+            if (!Report.Check(Tabs->GetActiveWidgetIndex()==1,TEXT("Actual law tab button switches content while paused")) ||
+                !Report.Check(ShopUIPreview::Save(Guide.Get(),TEXT("owl_guide_pollution")),TEXT("Render pollution and decree explanation")) ||
+                !Report.Check(ShopUIPreview::Save(Guide.Get(),TEXT("owl_guide_pollution_720p"),FIntPoint(1280,720)),TEXT("Render pollution explanation at 720p"))) return false;
+            Child<UScrollBox>(Guide.Get(),TEXT("PollutionScroll"))->ScrollToEnd();
+            if (!Report.Check(ShopUIPreview::Save(Guide.Get(),TEXT("owl_guide_decrees_bottom")),TEXT("Render all seven decree summaries through scroll area"))) return false;
+            Child<UButton>(Guide.Get(),TEXT("BtnClose"))->OnClicked.Broadcast();
+            return Report.Check(!Run->IsRealtimePaused() && Root->GetIsEnabled(),TEXT("Saved close button releases pause and restores background interaction"));
+        }
+
         bool VerifyMainMenuArtwork()
         {
             UUserWidget* Menu=Page(TEXT("MenuPage"));
@@ -1620,6 +1659,19 @@ int32 UShopUIVerifyCommandlet::Main(const FString& Params)
     UWorld* Entry = Load<UWorld>(AssetRoot + TEXT("Maps/L_BookstoreUI"));
     bAssetsReady &= Report.Check(Entry && Entry->GetOutermost()->HasAnyPackageFlags(PKG_ContainsMap), TEXT("Saved entry .umap loads as a map package"));
     UWidgetBlueprint* Root = Load<UWidgetBlueprint>(AssetRoot + TEXT("WBP_UIRoot"));
+    if(FParse::Param(*Params,TEXT("GuideOnly")))
+    {
+        {
+            FSession Guide(Report);
+            if(bAssetsReady && Guide.Start(PC->GeneratedClass,Root->GeneratedClass,false))
+                if(!Guide.Tutorial() || !Guide.VerifyGameGuideArtwork()) Report.Note(TEXT("Owl guide scenario stopped at first failure."));
+        }
+        Report.Note(FString::Printf(TEXT("OWL GUIDE RESULT checks=%d failures=%d"),Report.Checks,Report.Failures));
+        const FString Folder=FPaths::ProjectSavedDir()/TEXT("UIBuild/OwlGameGuide");
+        IFileManager::Get().MakeDirectory(*Folder,true);
+        FFileHelper::SaveStringToFile(Report.Lines,*(Folder/TEXT("Verification.txt")),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+        return Report.Failures?1:0;
+    }
     if(FParse::Param(*Params,TEXT("MainMenuOnly")))
     {
         {

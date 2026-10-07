@@ -82,6 +82,11 @@ public:
     UFUNCTION(BlueprintCallable, Category="Bookstore|View") bool RegisterView(UObject* View);
     UFUNCTION(BlueprintCallable, Category="Bookstore|View") void UnregisterView(UObject* View);
 
+    /** Reading overlays suspend realtime arrival/patience without changing the run phase or random stream. */
+    UFUNCTION(BlueprintCallable, Category="Bookstore|View") void PauseRealtimeFor(UObject* Owner);
+    UFUNCTION(BlueprintCallable, Category="Bookstore|View") void ResumeRealtimeFor(UObject* Owner);
+    UFUNCTION(BlueprintPure, Category="Bookstore|View") bool IsRealtimePaused() const;
+
     UPROPERTY(BlueprintAssignable, Category="Bookstore|Events") FShopChanged OnDayChanged;
     UPROPERTY(BlueprintAssignable, Category="Bookstore|Events") FShopChanged OnInventoryChanged;
     UPROPERTY(BlueprintAssignable, Category="Bookstore|Events") FShopChanged OnPhaseChanged;
@@ -104,6 +109,7 @@ private:
     bool bConfigured = false;
     bool bCommitting = false;
     TArray<TWeakObjectPtr<UObject>> Views;
+    TArray<TWeakObjectPtr<UObject>> RealtimePauseOwners;
 
     FShopCommandResult Result(bool Success, EShopActionResult Code, const FText& Message = FText(), FName Id = NAME_None);
     FShopCommandResult Reject(EShopActionResult Code, const TCHAR* Message);

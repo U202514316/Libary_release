@@ -56,6 +56,7 @@ void UShopRunSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 void UShopRunSubsystem::Deinitialize()
 {
     Views.Reset();
+    RealtimePauseOwners.Reset();
     State = FShopRunState();
     bConfigured = false;
     Super::Deinitialize();
@@ -117,6 +118,7 @@ FShopCommandResult UShopRunSubsystem::Reject(EShopActionResult Code, const TCHAR
 bool UShopRunSubsystem::ReadyForCommand()
 {
     if (bCommitting) return false;
+    if (IsRealtimePaused()) { Reject(EShopActionResult::Unavailable, TEXT("阅读介绍期间经营已暂停，请先关闭介绍。")); return false; }
     if (!bConfigured) { Reject(EShopActionResult::InvalidConfig, TEXT("数据未配置，请检查项目设置中的 Bookstore 数据表。")); return false; }
     if (State.Phase == EGamePhase::Boot || State.Phase == EGamePhase::End)
     { Reject(EShopActionResult::InvalidPhase, TEXT("请先开始一局游戏。")); return false; }
@@ -983,7 +985,20 @@ bool UShopRunSubsystem::RegisterView(UObject* View)
     return true;
 }
 void UShopRunSubsystem::UnregisterView(UObject* View) { Views.RemoveAll([View](const TWeakObjectPtr<UObject>& Entry) { return !Entry.IsValid() || Entry.Get() == View; }); }
-bool UShopRunSubsystem::IsTickable() const { return !IsTemplate() && bConfigured && !bCommitting && (TradingPhase(State.Phase) || SellingPhase(State.Phase)); }
+void UShopRunSubsystem::PauseRealtimeFor(UObject* Owner)
+{
+    RealtimePauseOwners.RemoveAll([](const TWeakObjectPtr<UObject>& Entry) { return !Entry.IsValid(); });
+    if (IsValid(Owner)) RealtimePauseOwners.AddUnique(TWeakObjectPtr<UObject>(Owner));
+}
+void UShopRunSubsystem::ResumeRealtimeFor(UObject* Owner)
+{
+    RealtimePauseOwners.RemoveAll([Owner](const TWeakObjectPtr<UObject>& Entry) { return !Entry.IsValid() || Entry.Get() == Owner; });
+}
+bool UShopRunSubsystem::IsRealtimePaused() const
+{
+    return RealtimePauseOwners.ContainsByPredicate([](const TWeakObjectPtr<UObject>& Entry) { return Entry.IsValid(); });
+}
+bool UShopRunSubsystem::IsTickable() const { return !IsTemplate() && bConfigured && !bCommitting && !IsRealtimePaused() && (TradingPhase(State.Phase) || SellingPhase(State.Phase)); }
 UWorld* UShopRunSubsystem::GetTickableGameObjectWorld() const { return GetWorld(); }
 TStatId UShopRunSubsystem::GetStatId() const { RETURN_QUICK_DECLARE_CYCLE_STAT(UShopRunSubsystem, STATGROUP_Tickables); }
 void UShopRunSubsystem::Tick(float DeltaTime)

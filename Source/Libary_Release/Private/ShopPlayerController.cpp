@@ -4,6 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Engine/GameInstance.h"
 #include "ShopAudioComponent.h"
+#include "ShopGameGuideWidget.h"
 
 AShopPlayerController::AShopPlayerController()
 {
@@ -63,6 +64,7 @@ bool AShopPlayerController::AttachShopView(UUserWidget* View)
 
 void AShopPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+    if (GameGuideWidget) { GameGuideWidget->CloseGuide(); GameGuideWidget = nullptr; }
     if (RootWidget)
     {
         if (UShopRunSubsystem* Run = GetShopRun()) Run->UnregisterView(RootWidget);
@@ -70,4 +72,18 @@ void AShopPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
         RootWidget = nullptr;
     }
     Super::EndPlay(EndPlayReason);
+}
+
+bool AShopPlayerController::OpenGameGuide()
+{
+    UShopRunSubsystem* Run = GetShopRun();
+    if (!IsLocalController() || !Run || !GameGuideWidgetClass || !RootWidget ||
+        Run->GetSnapshot_Implementation().Phase != EGamePhase::Day) return false;
+    if (GameGuideWidget && GameGuideWidget->IsInViewport()) return true;
+    if (Run->IsRealtimePaused()) return false;
+    GameGuideWidget = CreateWidget<UShopGameGuideWidget>(this, GameGuideWidgetClass);
+    if (!GameGuideWidget) return false;
+    GameGuideWidget->AddToViewport(100);
+    if (ShopAudio) ShopAudio->PlayEvent(TEXT("Owl_Advance"));
+    return true;
 }

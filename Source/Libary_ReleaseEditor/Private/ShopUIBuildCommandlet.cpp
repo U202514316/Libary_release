@@ -3,6 +3,7 @@
 #include "ShopUILayout.h"
 #include "ShopProgressionUpgrade.h"
 #include "ShopMainMenuAuthoring.h"
+#include "ShopGameGuideAuthoring.h"
 #include "ShopEndingAuthoring.h"
 #include "ShopAudioAuthoring.h"
 #include "ShopUIData.h"
@@ -541,6 +542,7 @@ namespace
         auto* ClearFeedback=TargetCall(G,TEXT("Feedback"),UTextBlock::StaticClass(),TEXT("SetText")); Next(ClearSelection,ClearFeedback);
         Action(BP,TEXT("BtnShelf"),TEXT("RequestBeginSell"),true); Action(BP,TEXT("BtnReject"),TEXT("RequestRejectCustomer"),true);
         Action(BP,TEXT("BtnObserve"),TEXT("RequestObserveCustomer"),true);
+        if(FPackageName::DoesPackageExist(TEXT("/Game/ProgramA/UI/Art/T_OwlPerched"))) Require(ShopGameGuideAuthoring::ApplyMailbox(BP),TEXT("Mailbox owl guide"));
         Finish(BP); return BP;
     }
     UWidgetBlueprint* InventoryPage(const TCHAR* Name,const TCHAR* Title,const TCHAR* Subtitle,UWidgetBlueprint* Card,const TArray<FName>& Ids,const TCHAR* ExitCaption,FName ExitCommand,const TCHAR* Background=Front)
@@ -905,6 +907,7 @@ int32 UShopUIBuildCommandlet::Main(const FString& Params)
 {
     FModuleManager::LoadModuleChecked<IModuleInterface>(TEXT("UMGEditor"));
     if(FParse::Param(*Params,TEXT("UpgradeMainMenuArtwork"))) return ShopMainMenuAuthoring::UpgradeProject()?0:1;
+    if(FParse::Param(*Params,TEXT("UpgradeOwlGameGuide"))) return ShopGameGuideAuthoring::UpgradeProject()?0:1;
     if(FParse::Param(*Params,TEXT("Restore35Days"))) return ShopUIData::Restore35Days()?0:1;
     if(FParse::Param(*Params,TEXT("RestorePsychicArtwork"))) return ShopUILayout::RestorePsychicProject()?0:1;
     if(FParse::Param(*Params,TEXT("UpgradeFiveEndings"))) return ShopEndingAuthoring::UpgradeProject()?0:1;

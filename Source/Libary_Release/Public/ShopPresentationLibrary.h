@@ -9,6 +9,7 @@
 
 class UUserWidget;
 class UTexture2D;
+class AShopPlayerController;
 
 UENUM(BlueprintType)
 enum class EShopStatField : uint8 { Day, Money, Psychic, Pollution, Income, Expense, Queue, Stock, Enlighten };
@@ -22,6 +23,14 @@ class LIBARY_RELEASE_API UShopPresentationLibrary : public UBlueprintFunctionLib
 {
     GENERATED_BODY()
 public:
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static AShopPlayerController* GetShopController(const UObject* WorldContextObject);
+    /** Game-guide copy reads the current run's actual rules and ending/decree data. */
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetGameGuideTitle(const UObject* WorldContextObject, int32 Section);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetGameGuideText(const UObject* WorldContextObject, int32 Section);
+
     /** Returns the existing root on a local shop controller in this world; never creates one. */
     UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
     static UUserWidget* GetRootView(const UObject* WorldContextObject);

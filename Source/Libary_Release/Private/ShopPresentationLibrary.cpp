@@ -682,3 +682,75 @@ int32 UShopPresentationLibrary::GetTutorialCount()
 {
     return UE_ARRAY_COUNT(ShopPresentation::TutorialLines);
 }
+
+AShopPlayerController* UShopPresentationLibrary::GetShopController(const UObject* Context)
+{
+    UUserWidget* Root = GetRootView(Context);
+    return Root ? Cast<AShopPlayerController>(Root->GetOwningPlayer()) : nullptr;
+}
+
+FText UShopPresentationLibrary::GetGameGuideTitle(const UObject* Context, int32 Section)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(Context);
+    const EShopEnding Endings[] = { EShopEnding::PollutionReleased, EShopEnding::Closed, EShopEnding::FailedRedemption, EShopEnding::Returned, EShopEnding::Redeemed };
+    if (Run && Section >= 0 && Section < UE_ARRAY_COUNT(Endings))
+    {
+        FEndingData Row;
+        if (Run->GetEndingInfo(Endings[Section], Row)) return Row.Title;
+    }
+    switch (Section)
+    {
+    case 5: return FText::FromString(TEXT("污染从哪里来"));
+    case 6: return FText::FromString(TEXT("污染阶段与风险"));
+    case 7: return FText::FromString(TEXT("怎样用律令控制污染"));
+    case 8: return FText::FromString(TEXT("七条律令：效果与代价"));
+    case 9: return FText::FromString(TEXT("达成结局的准备"));
+    default: return FText::GetEmpty();
+    }
+}
+
+FText UShopPresentationLibrary::GetGameGuideText(const UObject* Context, int32 Section)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(Context);
+    if (!Run) return FText::GetEmpty();
+    const FRunRules R = Run->GetRunRules();
+    FEndingData Closed, Empty, Truth, Redeemed;
+    Run->GetEndingInfo(EShopEnding::Closed, Closed);
+    Run->GetEndingInfo(EShopEnding::FailedRedemption, Empty);
+    Run->GetEndingInfo(EShopEnding::Returned, Truth);
+    Run->GetEndingInfo(EShopEnding::Redeemed, Redeemed);
+    FString Text;
+    switch (Section)
+    {
+    case 0:
+        Text = FString::Printf(TEXT("任意一天，污染达到 %d，立即被污染吞噬。\n这是最高优先级结局：不必等到第 %d 天，也不能在达到上限后再用律令挽救。"), R.PollutionLimit, R.MaxDays); break;
+    case 1:
+        Text = FString::Printf(TEXT("连续 %d 次夜间结算后资金为负数，书店关门，可在期末前触发。\n某次夜结资金恢复到 0 或以上，连续计数清零；若同时污染达到 %d，优先触发失控。"), Closed.NegativeDaysRequired, R.PollutionLimit); break;
+    case 2:
+        Text = FString::Printf(TEXT("完成第 %d 天夜间结算并点击继续时，资金少于 %d，进入空书架结局。\n前提是此前没有因污染失控或连续负资金而提前结束。"), R.MaxDays, Empty.MinMoney); break;
+    case 3:
+        Text = FString::Printf(TEXT("完成第 %d 天时，同时满足：资金 ≥ %d、启蒙 ≥ %d、污染 < %d。\n在最终询问中选择“将真相归还给众人”，达成真结局。确认后支付一次 %d 赎身金。"), R.MaxDays, Truth.MinMoney, Truth.MinEnlighten, Truth.MaxPollutionExclusive, Truth.RedemptionCost); break;
+    case 4:
+        Text = FString::Printf(TEXT("完成第 %d 天时资金 ≥ %d，但启蒙不足 %d 或污染 ≥ %d，会赎身离场。\n即使已满足真结局条件，选择“赎身离开城市”也进入此结局。支付一次 %d 赎身金；中途攒够资金不会自动结束。"), R.MaxDays, Redeemed.MinMoney, Truth.MinEnlighten, Truth.MaxPollutionExclusive, Redeemed.RedemptionCost); break;
+    case 5:
+        Text = FString::Printf(TEXT("翻阅里书：每本每晚一次，基础污染 +%d、灵能 +%d；%d%% 概率获得未收集的历史残页，获得时启蒙 +%d。\n成功售卖上架的里书：基础污染 +%d，同时按书籍配置获得高额资金和启蒙。\n黑市购买里书：每册基础污染 +%d；单纯上架或撤回不增加污染。\n夜结基础自然降低 %d 污染。律令、反噬、篡改书或污染返架书可能改变最终数值。"), R.PollutionOnRead, R.ReadPsychicGain, FMath::RoundToInt(R.HistoryFragmentChance * 100), R.HistoryFragmentEnlightenGain, R.PollutionOnSell, R.MarketBookPollution, R.PollutionDecay); break;
+    case 6:
+        Text = FString::Printf(TEXT("0–%d｜安全：保持低污染，为真结局留出余量。\n%d–%d｜轻度：有未封印里书时，夜晚可能额外增加 %d 污染；相关律令可以抑制蔓延。\n%d–%d｜中度：顾客耐心消耗速度变为 %.1f 倍，被污染顾客可能加入白天队列。\n%d–%d｜重度：宽限 %d 个逻辑回合后仍处于重度且未满足金律宽限条件，额外增加 %d 污染。应尽快降级。\n达到 %d｜立即失控，优先于律令或残页弹窗。"), R.LightThreshold-1, R.LightThreshold, R.MediumThreshold-1, R.LightSpreadPerNight, R.MediumThreshold, R.HeavyThreshold-1, 1.f+R.PatienceDropRatePolluted, R.HeavyThreshold, R.PollutionLimit-1, R.HeavyGraceTurns, R.HeavyPenalty, R.PollutionLimit); break;
+    case 7:
+        Text = FString::Printf(TEXT("表书店与里书店都可从“律令”入口打开选择页。污染跨入更高阶段时，也会请求打开律令页；若同时获得残页，先阅读残页。\n选择卡牌只查看预览；点击“确定”才消耗灵能、支付该卡代价并应用效果。有些律令立即减污，有些改变后续污染增长或夜间衰减；点击“介绍”可查看完整效果、代价与漏洞。\n候选受当前污染阶段、资源和冷却限制，不保证每次都能释放所有卡。没有可用普通律令时，提供应急镇定：资金 -%d、污染 -%d，不耗灵能。\n律令有持续效果、延迟反噬和冷却。夜结会推进逻辑回合，当前规则下污染升级也会推进；阅读本介绍或停留在律令页不推进回合。\n打开律令页或本介绍时，顾客到场、耐心和伪装顾客的污染计时都会暂停，关闭后继续。"), R.EmergencyMoneyCost, R.EmergencyPollutionCut); break;
+    case 8:
+        for (const TCHAR* Id : { TEXT("bronze_01"), TEXT("bronze_02"), TEXT("bronze_03"), TEXT("silver_01"), TEXT("silver_02"), TEXT("gold_01"), TEXT("gold_02") })
+        {
+            FDecreeData D;
+            if (!Run->GetDecreeInfo(Id, D) || !D.bEnabled) continue;
+            if (!Text.IsEmpty()) Text += TEXT("\n\n");
+            Text += FString::Printf(TEXT("%s｜灵能 %d · 即时减污 %d\n%s\n代价：%s\n反噬：%s"), *D.DisplayName.ToString(), D.PsychicCost, D.PollutionCut, *D.EffectText.ToString(), *D.CostText.ToString(), *D.LoopholeText.ToString());
+            if (FName(Id)==TEXT("gold_02")) Text += TEXT("\n说明：重置的是当前阶段的预警／宽限记录，不改变污染分段的数值阈值。");
+        }
+        break;
+    case 9:
+        Text = FString::Printf(TEXT("期末指完成第 %d 天夜间结算后点击“继续”，不会进入第 %d 天。结局判断使用支付赎身金之前的资金。\n获得一张新残页增加 %d 启蒙；成功售卖里书也会增加启蒙，具体以书架说明为准。获取收益时同时留意污染，使用律令控制风险。\n此页只供查阅，不会推进天数、消耗灵能、抽取残页或重新开始游戏。"), R.MaxDays, R.MaxDays+1, R.HistoryFragmentEnlightenGain); break;
+    default: break;
+    }
+    return FText::FromString(Text);
+}
