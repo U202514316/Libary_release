@@ -1,5 +1,7 @@
 # 程序 A：C++ 逻辑与蓝图接入说明
 
+> 2026-10-07 五结局更新：当前运行改为 8 天验证模式，结局按新《结局.docx》替换为关门、污染失控、空书架、归还、赎身离场。归还现在需要资金至少 1500，并由玩家确认；两个成功结局支付一次 1500。下文 35 天／四结局及无需资金的内容仅为旧版本记录。当前接口与完整规则以[控件蓝图闭环使用说明](控件蓝图闭环使用说明.md)开头为准。
+
 > **当前入口：**`/Game/ProgramA/UI`下已接通 15 个具有真实 Designer 与 EventGraph 的可编辑 WBP，以及“菜单／引导 → 白天固定 3 槽（每人等 2–4 秒，点击到场人物后操作）→ 夜间进货／里店上架二选一 → 夜结／次日 → 律令、结局与重开”的接口闭环。请以 [控件蓝图闭环使用说明](控件蓝图闭环使用说明.md) 为当前接入与调参主说明，运行地图为 `/Game/ProgramA/UI/Maps/L_BookstoreUI`。当前使用 UI 专用规则及律令表，夜间不营业；原 Release 表和旧夜间表店模式保留兼容。
 
 适用工程：`D:\unreal_project\Libary_release\Libary_Release.uproject`，引擎 UE 5.1，运行时模块 `Libary_Release`。**本次顾客去重／专属商人版本：Editor 编译、数据迁移和资产编译均成功；43 项经营自动化通过；最终界面回归 38,134 项检查、0 失败、0 错误、0 警告，92 张实际渲染。** 日志为 `Saved/Logs/UniquePortraits_Merchant_EditorBuild.log`、`UniquePortraits_DataBuild.log`、`UniquePortraits_Merchant_AssetBuild.log`、`UniquePortraits_Merchant_UIVerify.log`；经营报告在 `Saved/Automation/UniquePortraits_20261006/index.json`。35 天及四结局已回归；污染顾客与神秘人专项测试使用明确的临时生成配置。猫头鹰教程、猫头鹰纹理及 UI 律令表哈希未变，经营表仅开启立绘去重。旧 CharacterPortraits 的 34,240 项／85 图和此前验证仍属历史，共享 `Verification.txt`已更新。未进行人工 PIE 鼠标验收，未打包 exe。

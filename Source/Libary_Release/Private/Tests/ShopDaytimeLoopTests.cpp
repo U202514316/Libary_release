@@ -118,7 +118,7 @@ bool FShopDaytimeStockAndSupplyTest::RunTest(const FString&)
     ShopEconomy::Reset(State, C); State.Psychic = 98;
     TestTrue(TEXT("Existing copy is listed before supply"), ShopEconomy::SetSecretListing(State, C, Secret, true, Error));
     if (!TestTrue(TEXT("Apply bounded balanced supply"), ShopEconomy::ApplyNightlySupply(State, C, Error))) return false;
-    TestEqual(TEXT("Psychic recovery clamps at maximum"), State.Psychic, 100);
+    TestEqual(TEXT("Psychic recovery crosses the former maximum"), State.Psychic, 106);
     TestEqual(TEXT("Lowest stock then lexical tie-breaking selects A twice total"), State.Inventory[Secret].Stock, 2);
     TestEqual(TEXT("Initially empty B receives first supply"), State.Inventory[OtherSecret].Stock, 1);
     TestEqual(TEXT("Existing listing is retained"), State.Inventory[Secret].ListedCopies, 1);

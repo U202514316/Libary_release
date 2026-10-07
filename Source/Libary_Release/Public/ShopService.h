@@ -27,6 +27,7 @@ public:
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") bool RequestContinue();
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") bool RequestRestock(FName BookId);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") bool RequestNextDay();
+    UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestChooseEnding(EShopFinalChoice Choice);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestObserveCustomer(int32 CustomerIndex);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestRejectCustomer(int32 CustomerIndex);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestOpenInside();
@@ -40,6 +41,7 @@ public:
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestEndNight();
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestPurify(int32 Amount);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestEnactDecree(FName DecreeId);
+    UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestOpenDecrees();
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestSkipDecree();
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestHistoryChoice(EHistoryChoice Choice);
     UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category="Bookstore|Service") FShopCommandResult RequestOwlTalk();

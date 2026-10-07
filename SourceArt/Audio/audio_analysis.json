@@ -1,0 +1,509 @@
+[
+  {
+    "file": "AMB_Inside.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 13.621,
+    "peak_dbfs": -20.96,
+    "rms_dbfs": -49.22,
+    "active_seconds": [
+      0.018,
+      12.381
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "AMB_Rain.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 45.438,
+    "peak_dbfs": -1.57,
+    "rms_dbfs": -30.53,
+    "active_seconds": [
+      0.0,
+      45.433
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "BGM_End_Closed.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 31.819,
+    "peak_dbfs": -2.22,
+    "rms_dbfs": -18.99,
+    "active_seconds": [
+      0.192,
+      31.621
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "BGM_End_Cycle.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 41.5,
+    "peak_dbfs": 0.43,
+    "rms_dbfs": -16.01,
+    "active_seconds": [
+      0.502,
+      41.411
+    ],
+    "prepared_gain": 0.8485724679158354
+  },
+  {
+    "file": "BGM_End_Release.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 50.473,
+    "peak_dbfs": 2.08,
+    "rms_dbfs": -11.83,
+    "active_seconds": [
+      0.032,
+      47.757
+    ],
+    "prepared_gain": 0.7018318764457714
+  },
+  {
+    "file": "BGM_End_Return.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 39.625,
+    "peak_dbfs": -0.68,
+    "rms_dbfs": -16.46,
+    "active_seconds": [
+      0.503,
+      35.929
+    ],
+    "prepared_gain": 0.9635982564269124
+  },
+  {
+    "file": "BGM_Inside.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 84.45,
+    "peak_dbfs": 2.87,
+    "rms_dbfs": -14.65,
+    "active_seconds": [
+      1.294,
+      83.389
+    ],
+    "prepared_gain": 0.6406847364629279
+  },
+  {
+    "file": "BGM_Market.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 64.005,
+    "peak_dbfs": 0.13,
+    "rms_dbfs": -15.75,
+    "active_seconds": [
+      0.759,
+      63.246
+    ],
+    "prepared_gain": 0.8781622687766014
+  },
+  {
+    "file": "BGM_Shop_Day.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 89.923,
+    "peak_dbfs": -1.52,
+    "rms_dbfs": -16.95,
+    "active_seconds": [
+      1.15,
+      85.784
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "BGM_Title.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 38.4,
+    "peak_dbfs": 0.19,
+    "rms_dbfs": -15.0,
+    "active_seconds": [
+      0.001,
+      38.4
+    ],
+    "prepared_gain": 0.8718630543481569
+  },
+  {
+    "file": "SFX_Bell_01.wav",
+    "format": 1,
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 3.861,
+    "peak_dbfs": -6.86,
+    "rms_dbfs": -30.64,
+    "active_seconds": [
+      1.335,
+      2.125
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Bell_02.wav",
+    "format": 1,
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 3.861,
+    "peak_dbfs": -6.86,
+    "rms_dbfs": -30.64,
+    "active_seconds": [
+      1.335,
+      2.125
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Cash.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 2.219,
+    "peak_dbfs": -11.16,
+    "rms_dbfs": -30.31,
+    "active_seconds": [
+      0.029,
+      0.432
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Click.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 3.692,
+    "peak_dbfs": -5.3,
+    "rms_dbfs": -43.69,
+    "active_seconds": [
+      0.054,
+      0.3
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Close.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 3.371,
+    "peak_dbfs": -4.08,
+    "rms_dbfs": -31.96,
+    "active_seconds": [
+      0.004,
+      1.292
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_DayEnd.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 2.667,
+    "peak_dbfs": -15.14,
+    "rms_dbfs": -35.94,
+    "active_seconds": [
+      0.002,
+      1.421
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Decree.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 5.744,
+    "peak_dbfs": -1.81,
+    "rms_dbfs": -16.87,
+    "active_seconds": [
+      0.002,
+      4.082
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Door_Inside.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.884,
+    "peak_dbfs": -0.27,
+    "rms_dbfs": -25.03,
+    "active_seconds": [
+      0.031,
+      1.67
+    ],
+    "prepared_gain": 0.9194207278680266
+  },
+  {
+    "file": "SFX_Ending.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 5.915,
+    "peak_dbfs": -5.06,
+    "rms_dbfs": -25.59,
+    "active_seconds": [
+      0.003,
+      2.44
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Error.wav",
+    "format": 1,
+    "bits": 16,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 3.221,
+    "peak_dbfs": -11.79,
+    "rms_dbfs": -29.59,
+    "active_seconds": [
+      1.267,
+      1.445
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_History_Enter.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 3.438,
+    "peak_dbfs": -1.88,
+    "rms_dbfs": -15.79,
+    "active_seconds": [
+      0.031,
+      3.404
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Loophole.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 5.933,
+    "peak_dbfs": 1.54,
+    "rms_dbfs": -22.97,
+    "active_seconds": [
+      0.001,
+      2.903
+    ],
+    "prepared_gain": 0.7464438860685548
+  },
+  {
+    "file": "SFX_Market_Buy.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.629,
+    "peak_dbfs": -0.21,
+    "rms_dbfs": -28.39,
+    "active_seconds": [
+      0.023,
+      1.5
+    ],
+    "prepared_gain": 0.9125594046961306
+  },
+  {
+    "file": "SFX_Market_Open.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.719,
+    "peak_dbfs": -3.36,
+    "rms_dbfs": -19.99,
+    "active_seconds": [
+      0.001,
+      1.652
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Market_Taboo.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 3.871,
+    "peak_dbfs": -2.71,
+    "rms_dbfs": -22.87,
+    "active_seconds": [
+      0.001,
+      2.499
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Owl_Click.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.871,
+    "peak_dbfs": -6.2,
+    "rms_dbfs": -36.79,
+    "active_seconds": [
+      0.246,
+      0.763
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Owl_Hoot.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.719,
+    "peak_dbfs": -180.0,
+    "rms_dbfs": -180.0,
+    "active_seconds": [],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Page.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.906,
+    "peak_dbfs": -0.94,
+    "rms_dbfs": -34.41,
+    "active_seconds": [
+      0.043,
+      1.057
+    ],
+    "prepared_gain": 0.9935186256166014
+  },
+  {
+    "file": "SFX_Patience.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.134,
+    "peak_dbfs": -5.44,
+    "rms_dbfs": -26.21,
+    "active_seconds": [
+      0.044,
+      1.038
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Pollution_01.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.888,
+    "peak_dbfs": -4.01,
+    "rms_dbfs": -21.06,
+    "active_seconds": [
+      0.001,
+      1.2
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Pollution_02.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.906,
+    "peak_dbfs": -4.5,
+    "rms_dbfs": -21.52,
+    "active_seconds": [
+      0.001,
+      1.248
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Pollution_03.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.893,
+    "peak_dbfs": -4.34,
+    "rms_dbfs": -21.45,
+    "active_seconds": [
+      0.001,
+      1.228
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "SFX_Whisper.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 2.393,
+    "peak_dbfs": -3.85,
+    "rms_dbfs": -19.77,
+    "active_seconds": [
+      0.022,
+      2.352
+    ],
+    "prepared_gain": 1.0
+  },
+  {
+    "file": "UI_Hover.wav",
+    "format": 3,
+    "bits": 32,
+    "channels": 2,
+    "rate": 44100,
+    "seconds": 1.719,
+    "peak_dbfs": -26.19,
+    "rms_dbfs": -51.22,
+    "active_seconds": [
+      0.001,
+      0.369
+    ],
+    "prepared_gain": 1.0
+  }
+]

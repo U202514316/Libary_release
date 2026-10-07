@@ -94,7 +94,7 @@ FText UShopPresentationLibrary::GetStatText(const UObject* WorldContextObject, E
     case EShopStatField::Money:
         return FText::FromString(FString::Printf(TEXT("资金 %d"), Snapshot.Money));
     case EShopStatField::Psychic:
-        return FText::FromString(FString::Printf(TEXT("灵能 %d / %d"), Snapshot.Psychic, Snapshot.PsychicMax));
+        return FText::FromString(FString::Printf(TEXT("灵能 %d"), Snapshot.Psychic));
     case EShopStatField::Pollution:
         return FText::FromString(FString::Printf(TEXT("污染 %d  ·  启蒙 %d"), Snapshot.Pollution, Snapshot.Enlighten));
     case EShopStatField::Income:
@@ -131,7 +131,7 @@ FText UShopPresentationLibrary::GetHudStatText(const UObject* WorldContextObject
     if (!Run) return FText::FromString(TEXT("—"));
     const FRunSnapshot Snapshot = Run->GetSnapshot_Implementation();
     if (Field == EShopStatField::Psychic)
-        return FText::FromString(FString::Printf(TEXT("%d / %d"), Snapshot.Psychic, Snapshot.PsychicMax));
+        return FText::AsNumber(Snapshot.Psychic, &FNumberFormattingOptions::DefaultNoGrouping());
     if (Field == EShopStatField::Pollution)
         return FText::FromString(FString::Printf(TEXT("污染 %d"), Snapshot.Pollution));
     return GetStatText(WorldContextObject, Field);
@@ -221,10 +221,10 @@ FText UShopPresentationLibrary::GetBookDescription(const UObject* WorldContextOb
     if (!ShopPresentation::BookInfo(ShopPresentation::Resolve(WorldContextObject), BookId, Book)) return FText::GetEmpty();
     FString Description = FString::Printf(TEXT("%s  ·  基础售价 %d"), *UShopBlueprintLibrary::GetBookTypeText(Book.BookType).ToString(), Book.Price);
     if (Book.BookType == EBookType::Secret)
-        Description += TEXT("\n在里书店上架后，供表店的秘密顾客购买。");
+        Description += TEXT("\n上架后供表店秘密顾客购买。");
     else Description += FString::Printf(TEXT("  ·  进货价 %d"), Book.Cost);
     if (Book.SaleEnlightenYield > 0)
-        Description += FString::Printf(TEXT("\n售出后有 %d%% 概率获得 %d 点启蒙。"),
+        Description += Book.SaleEnlightenChance >= 1.f ? FString::Printf(TEXT("\n成功售出：启蒙 +%d"), Book.SaleEnlightenYield) : FString::Printf(TEXT("\n售出：%d%% 概率启蒙 +%d"),
             FMath::RoundToInt(Book.SaleEnlightenChance * 100.f), Book.SaleEnlightenYield);
     return FText::FromString(Description);
 }
@@ -258,6 +258,14 @@ bool UShopPresentationLibrary::CanBookAction(const UObject* WorldContextObject, 
         return Snapshot.Phase == EGamePhase::Inside && bSecret && Runtime.StoredCopies > 0;
     case EShopBookAction::Unlist:
         return Snapshot.Phase == EGamePhase::Inside && bSecret && Runtime.ListedCopies > 0;
+    case EShopBookAction::Read:
+    {
+        FText Reason; return Run->CanReadSecret(BookId, Reason);
+    }
+    case EShopBookAction::BuySecret:
+    {
+        FText Reason; return Run->CanBuyMarketItem(BookId, Reason);
+    }
     case EShopBookAction::Sell:
     {
         if (Snapshot.Phase != EGamePhase::Sell && Snapshot.Phase != EGamePhase::NightSell) return false;
@@ -294,6 +302,10 @@ FText UShopPresentationLibrary::GetDecreeText(const UObject* WorldContextObject,
     FString Description = !Decree.EffectText.IsEmpty() ? Decree.EffectText.ToString() : Decree.Text.ToString();
     if (Description.IsEmpty()) Description = FString::Printf(TEXT("降低 %d 点污染。"), Decree.PollutionCut);
     if (!Decree.LoopholeText.IsEmpty()) Description += TEXT("\n漏洞：") + Decree.LoopholeText.ToString();
+    const FRunRules Rules = ShopPresentation::Resolve(WorldContextObject)->GetRunRules();
+    if (!Decree.bFallback) Description += FString::Printf(TEXT("\n持续 %d 回合 · 到期后冷却 %d 回合"),
+        Decree.LoopholeDelay > 0 ? Decree.LoopholeDelay : Rules.LoopholeDelayTurns,
+        Decree.CooldownTurns > 0 ? Decree.CooldownTurns : Rules.DecreeCooldownTurns);
     return FText::FromString(Description);
 }
 
@@ -314,11 +326,197 @@ bool UShopPresentationLibrary::CanChooseDecree(const UObject* WorldContextObject
     return Run && !Id.IsNone() && Run->CanEnactDecree(Id, Reason);
 }
 
+ESlateVisibility UShopPresentationLibrary::GetDecreeEntryVisibility(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    if (!Run) return ESlateVisibility::Collapsed;
+    const EGamePhase Phase = Run->GetSnapshot_Implementation().Phase;
+    return Phase == EGamePhase::Day || Phase == EGamePhase::Sell || Phase == EGamePhase::Inside
+        ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+}
+
+FText UShopPresentationLibrary::GetDecreeNameById(const UObject* WorldContextObject, FName DecreeId)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    FDecreeData Data;
+    if (!Run || !Run->GetDecreeInfo(DecreeId, Data)) return FText::GetEmpty();
+    const FString Prefix = DecreeId.ToString().StartsWith(TEXT("gold_")) ? TEXT("金 · ")
+        : DecreeId.ToString().StartsWith(TEXT("silver_")) ? TEXT("银 · ")
+        : DecreeId.ToString().StartsWith(TEXT("bronze_")) ? TEXT("铜 · ") : TEXT("");
+    return FText::FromString(Prefix + Data.DisplayName.ToString());
+}
+
+FText UShopPresentationLibrary::GetDecreeDescriptionById(const UObject* WorldContextObject, FName DecreeId)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    FDecreeData Data;
+    if (!Run || !Run->GetDecreeInfo(DecreeId, Data)) return FText::GetEmpty();
+    FString Description = TEXT("律令效果\n") + (!Data.EffectText.IsEmpty() ? Data.EffectText.ToString() : Data.Text.ToString());
+    Description += FString::Printf(TEXT("\n\n释放消耗\n灵能 %d 点；污染降低 %d 点。"), Data.PsychicCost, Data.PollutionCut);
+    if (!Data.CostText.IsEmpty()) Description += TEXT("\n") + Data.CostText.ToString();
+    if (!Data.LoopholeText.IsEmpty()) Description += TEXT("\n\n到期反噬\n") + Data.LoopholeText.ToString();
+    if (!Data.bFallback)
+    {
+        const FRunRules Rules = Run->GetRunRules();
+        Description += FString::Printf(TEXT("\n\n持续与冷却\n持续 %d 回合，到期后冷却 %d 回合。\n夜间结算推进一回合%s。永久代价不会随律令到期消失。"),
+            Data.LoopholeDelay > 0 ? Data.LoopholeDelay : Rules.LoopholeDelayTurns,
+            Data.CooldownTurns > 0 ? Data.CooldownTurns : Rules.DecreeCooldownTurns,
+            Rules.bAdvanceTurnOnStageRise ? TEXT("，跨入更高污染阶段也会推进") : TEXT(""));
+    }
+    Description += TEXT("\n\n当前状态\n") + GetDecreeAvailabilityText(WorldContextObject, DecreeId).ToString();
+    return FText::FromString(Description);
+}
+
+FText UShopPresentationLibrary::GetDecreeSummaryById(const UObject* WorldContextObject, FName DecreeId)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    FDecreeData Data;
+    return Run && Run->GetDecreeInfo(DecreeId, Data)
+        ? FText::FromString(FString::Printf(TEXT("灵能消耗 %d  ·  污染降低 %d"), Data.PsychicCost, Data.PollutionCut)) : FText::GetEmpty();
+}
+
+bool UShopPresentationLibrary::HasDecreeSelection(const UObject* WorldContextObject, FName DecreeId)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); FDecreeData Data;
+    return Run && !DecreeId.IsNone() && Run->GetDecreeInfo(DecreeId, Data) && Data.bEnabled;
+}
+
+bool UShopPresentationLibrary::CanConfirmDecree(const UObject* WorldContextObject, FName DecreeId)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); FText Reason;
+    return Run && !DecreeId.IsNone() && Run->CanEnactDecree(DecreeId, Reason);
+}
+
+FText UShopPresentationLibrary::GetDecreeAvailabilityText(const UObject* WorldContextObject, FName DecreeId, bool bCompact)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); FDecreeData Data;
+    if (!Run || DecreeId.IsNone()) return FText::FromString(bCompact ? TEXT("") : TEXT("先从左侧选择一条律令"));
+    if (!Run->GetDecreeInfo(DecreeId, Data) || !Data.bEnabled) return FText::FromString(TEXT("暂不可用"));
+    const FRunSnapshot Snapshot = Run->GetSnapshot_Implementation();
+    const FDecreeRuntime* Latest = nullptr;
+    for (const FDecreeRuntime& Runtime : Snapshot.ActiveDecrees)
+        if (Runtime.Id == DecreeId && (!Latest || Runtime.EnactedTurn >= Latest->EnactedTurn)) Latest = &Runtime;
+    if (Latest && Latest->bActive) return FText::FromString(bCompact ? TEXT("生效中") : FString::Printf(TEXT("生效中 · 剩余 %d 回合"), FMath::Max(0, Latest->LoopholeAtTurn - Snapshot.Turn)));
+    if (Latest && Latest->CooldownUntilTurn > Snapshot.Turn) return FText::FromString(bCompact
+        ? FString::Printf(TEXT("冷却 %d 回合"), Latest->CooldownUntilTurn - Snapshot.Turn)
+        : FString::Printf(TEXT("冷却中 · 剩余 %d 回合"), Latest->CooldownUntilTurn - Snapshot.Turn));
+    if (!Data.bFallback && (Snapshot.PollutionStage < Data.MinStage || Snapshot.PollutionStage > Data.MaxStage))
+        return FText::FromString(bCompact ? TEXT("尚未解锁") : TEXT("当前污染阶段未解锁；可查看介绍"));
+    if (Snapshot.Psychic < Data.PsychicCost) return FText::FromString(TEXT("灵能不足"));
+    if (CanConfirmDecree(WorldContextObject, DecreeId)) return FText::FromString(bCompact ? TEXT("可释放") : TEXT("点击确定释放 · 消耗与代价见介绍"));
+    return FText::FromString(bCompact ? TEXT("本次不可用") : TEXT("未进入本次候选，或不满足释放代价"));
+}
+
+FLinearColor UShopPresentationLibrary::GetDecreeSelectionColor(FName DecreeId, FName SelectedDecreeId)
+{
+    return !SelectedDecreeId.IsNone() && DecreeId == SelectedDecreeId
+        ? FLinearColor(1.f, 0.018f, 0.008f, 1.f) : FLinearColor::Transparent;
+}
+
+FLinearColor UShopPresentationLibrary::GetDecreeCardTint(const UObject* WorldContextObject, FName DecreeId)
+{
+    return CanConfirmDecree(WorldContextObject, DecreeId) ? FLinearColor::White : FLinearColor(0.42f, 0.42f, 0.42f, 1.f);
+}
+
+ESlateVisibility UShopPresentationLibrary::GetUnselectedDecreeVisibility(FName SelectedDecreeId)
+{
+    return SelectedDecreeId.IsNone() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed;
+}
+
+ESlateVisibility UShopPresentationLibrary::GetEmergencyDecreeVisibility(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    return Run && Run->GetSnapshot_Implementation().DecreeCandidates.Contains(TEXT("emergency_calm"))
+        ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+}
+
+FText UShopPresentationLibrary::GetDecreeStatusText(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    if (!Run) return FText::GetEmpty();
+    const FRunSnapshot Snapshot = Run->GetSnapshot_Implementation();
+    FString Text = FString::Printf(TEXT("当前回合 %d。每次夜结推进一回合；跨入更高污染阶段也会推进。永久代价不会随律令到期消失。\n"), Snapshot.Turn);
+    for (FName Id : Run->GetDecreeIds())
+    {
+        FDecreeData Data; if (!Run->GetDecreeInfo(Id, Data) || !Data.bEnabled) continue;
+        const FDecreeRuntime* Latest = nullptr;
+        for (const FDecreeRuntime& Runtime : Snapshot.ActiveDecrees)
+            if (Runtime.Id == Id && (!Latest || Runtime.EnactedTurn >= Latest->EnactedTurn)) Latest = &Runtime;
+        FString Status;
+        if (Latest && Latest->bActive) Status = FString::Printf(TEXT("生效中，到反噬剩余 %d 回合"), FMath::Max(0, Latest->LoopholeAtTurn - Snapshot.Turn));
+        else if (Latest && Latest->CooldownUntilTurn > Snapshot.Turn) Status = FString::Printf(TEXT("冷却中，剩余 %d 回合"), Latest->CooldownUntilTurn - Snapshot.Turn);
+        else if (Snapshot.PollutionStage < Data.MinStage || Snapshot.PollutionStage > Data.MaxStage) Status = TEXT("当前污染阶段未解锁");
+        else { FText Reason; Status = Run->CanEnactDecree(Id, Reason) ? TEXT("已就绪") : TEXT("代价不足或当前不可用"); }
+        Text += Data.DisplayName.ToString() + TEXT("：") + Status + TEXT("\n");
+    }
+    return FText::FromString(Text);
+}
+
+FText UShopPresentationLibrary::GetBacklashLogText(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    if (!Run) return FText::GetEmpty();
+    const TArray<FText> Log = Run->GetSnapshot_Implementation().DecreeBacklashLog;
+    FString Text = TEXT("反噬记录（最近发生的在前）\n");
+    if (Log.IsEmpty()) Text += TEXT("本局尚未发生律令反噬。");
+    for (int32 Index = Log.Num()-1; Index >= 0; --Index) Text += Log[Index].ToString() + TEXT("\n\n");
+    return FText::FromString(Text);
+}
+
+FText UShopPresentationLibrary::GetLatestBacklashText(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    if (!Run) return FText::GetEmpty();
+    const FRunSnapshot Snapshot = Run->GetSnapshot_Implementation();
+    return Snapshot.Phase != EGamePhase::Boot && !Snapshot.DecreeBacklashLog.IsEmpty()
+        ? FText::Format(FText::FromString(TEXT("最近反噬：{0}")), Snapshot.DecreeBacklashLog.Last()) : FText::GetEmpty();
+}
+
+FText UShopPresentationLibrary::GetHistoryTitle(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); FEventData Event;
+    return Run && Run->GetEventInfo(Run->GetSnapshot_Implementation().PendingEventId, Event) ? Event.Title : FText::GetEmpty();
+}
+FText UShopPresentationLibrary::GetHistoryBody(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); FEventData Event;
+    return Run && Run->GetEventInfo(Run->GetSnapshot_Implementation().PendingEventId, Event) ? Event.Text : FText::GetEmpty();
+}
+FText UShopPresentationLibrary::GetHistoryProgress(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    return Run ? FText::FromString(FString::Printf(TEXT("本局已收集 %d / 7 张 · 获得新残页：启蒙 +%d。奖励已结算，关闭不会重复发放。"),
+        Run->GetSnapshot_Implementation().CollectedHistoryPages.Num(), Run->GetRunRules().HistoryFragmentEnlightenGain)) : FText::GetEmpty();
+}
+bool UShopPresentationLibrary::CanVisitBlackMarket(const UObject* WorldContextObject)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); return Run && Run->CanOpenMarket();
+}
+ESlateVisibility UShopPresentationLibrary::GetBlackMarketVisibility(const UObject* WorldContextObject)
+{
+    return CanVisitBlackMarket(WorldContextObject) ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+}
+FText UShopPresentationLibrary::GetMarketBookDescription(const UObject* WorldContextObject, FName BookId)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); FMarketItemData Item;
+    if (!Run || !Run->GetMarketItemInfo(BookId, Item)) return FText::GetEmpty();
+    return FText::FromString(FString::Printf(TEXT("黑市价 %d · 基础污染 +%d\n限购 1 册，入里店后上架。"), Item.Price, Run->GetRunRules().MarketBookPollution));
+}
+FText UShopPresentationLibrary::GetReadButtonText(const UObject* WorldContextObject, FName BookId)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject); FBookRuntime Book;
+    if (!Run || !Run->GetBookRuntime(BookId, Book)) return FText::FromString(TEXT("翻阅"));
+    const FRunRules Rules = Run->GetRunRules();
+    return FText::FromString(Book.LastReadDay == Run->GetSnapshot_Implementation().Day ? FString(TEXT("今晚已翻阅"))
+        : FString::Printf(TEXT("翻阅 · 污染 +%d / 灵能 +%d"), Rules.PollutionOnRead, Rules.ReadPsychicGain));
+}
+
 FText UShopPresentationLibrary::GetEndingTitle(const UObject* WorldContextObject)
 {
     const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
     if (!Run) return FText::GetEmpty();
     const FRunSnapshot Snapshot = Run->GetSnapshot_Implementation();
+    if (Snapshot.Phase == EGamePhase::EndingChoice) return FText::FromString(TEXT("是否将真相归还给众人？"));
     FEndingData Ending;
     if (Run->GetEndingInfo(Snapshot.Ending, Ending)) return Ending.Title;
     switch (Snapshot.Ending)
@@ -327,6 +525,8 @@ FText UShopPresentationLibrary::GetEndingTitle(const UObject* WorldContextObject
     case EShopEnding::PollutionReleased: return FText::FromString(TEXT("污染释放"));
     case EShopEnding::Returned: return FText::FromString(TEXT("归还"));
     case EShopEnding::Cycle: return FText::FromString(TEXT("守旧循环"));
+    case EShopEnding::FailedRedemption: return FText::FromString(TEXT("空书架"));
+    case EShopEnding::Redeemed: return FText::FromString(TEXT("赎身离场"));
     default: return FText::GetEmpty();
     }
 }
@@ -336,8 +536,17 @@ FText UShopPresentationLibrary::GetEndingText(const UObject* WorldContextObject)
     const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
     if (!Run) return FText::GetEmpty();
     const FRunSnapshot Snapshot = Run->GetSnapshot_Implementation();
-    FEndingData Ending;
-    return Run->GetEndingInfo(Snapshot.Ending, Ending) ? Ending.Text : Snapshot.EndMessage;
+    if (Snapshot.Phase == EGamePhase::EndingChoice)
+        return FText::FromString(TEXT("你已凑够赎身金，也获得了足够的启蒙，并控制住污染。\n\n你可以留下来经营书店，将埋藏的真相归还给众人；也可以赎回自由，独自离开这座城市。\n\n请选择你的决定。确认后支付赎身金，并进入对应结局。"));
+    return Snapshot.EndMessage;
+}
+
+ESlateVisibility UShopPresentationLibrary::GetEndingChoiceVisibility(const UObject* WorldContextObject, bool bChoice)
+{
+    const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
+    if (!Run) return ESlateVisibility::Collapsed;
+    const EGamePhase Phase = Run->GetSnapshot_Implementation().Phase;
+    return (bChoice ? Phase == EGamePhase::EndingChoice : Phase == EGamePhase::End) ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
 }
 
 FText UShopPresentationLibrary::GetEndingConditionText(const UObject* WorldContextObject)
@@ -345,6 +554,12 @@ FText UShopPresentationLibrary::GetEndingConditionText(const UObject* WorldConte
     const UShopRunSubsystem* Run = ShopPresentation::Resolve(WorldContextObject);
     if (!Run) return FText::GetEmpty();
     const FRunSnapshot Snapshot = Run->GetSnapshot_Implementation();
+    if (Snapshot.Phase == EGamePhase::EndingChoice)
+    {
+        FEndingData Returned; Run->GetEndingInfo(EShopEnding::Returned, Returned);
+        return FText::FromString(FString::Printf(TEXT("第 %d / %d 天 · 当前资金 %d · 赎身金 %d\n启蒙 %d · 污染 %d · 等待你的选择"),
+            Snapshot.Day, Snapshot.MaxDays, Snapshot.Money, Returned.RedemptionCost, Snapshot.Enlighten, Snapshot.Pollution));
+    }
     FEndingData Data;
     if (!Run->GetEndingInfo(Snapshot.Ending, Data)) return FText::GetEmpty();
     FString Reason;
@@ -360,7 +575,12 @@ FText UShopPresentationLibrary::GetEndingConditionText(const UObject* WorldConte
         break;
     case EShopEndingCondition::FinalFallback:
         Reason = FString::Printf(TEXT("完成 %d 天，但未同时满足“归还”的条件，进入新的循环。"), Snapshot.MaxDays); break;
+    case EShopEndingCondition::FinalMoneyBelow:
+        Reason = FString::Printf(TEXT("完成 %d 天，资金不足 %d，未能赎回自由。"), Snapshot.MaxDays, Data.MinMoney); break;
+    case EShopEndingCondition::FinalMoneyAtLeast:
+        Reason = FString::Printf(TEXT("完成 %d 天，已凑够赎身金，独自离开城市。"), Snapshot.MaxDays); break;
     }
+    if (Snapshot.RedemptionPaid > 0) Reason += FString::Printf(TEXT("判定前资金 %d；已支付赎身金 %d。"), Snapshot.Money + Snapshot.RedemptionPaid, Snapshot.RedemptionPaid);
     return FText::FromString(Reason + FString::Printf(TEXT("\n最终记录：第 %d 天  ·  资金 %d  ·  污染 %d  ·  启蒙 %d"), Snapshot.Day, Snapshot.Money, Snapshot.Pollution, Snapshot.Enlighten));
 }
 
@@ -374,6 +594,8 @@ FLinearColor UShopPresentationLibrary::GetEndingAccent(const UObject* WorldConte
     case EShopEnding::PollutionReleased: return FLinearColor(.5f,.035f,.045f,1.f);
     case EShopEnding::Returned: return FLinearColor(.1f,.35f,.25f,1.f);
     case EShopEnding::Cycle: return FLinearColor(.23f,.18f,.37f,1.f);
+    case EShopEnding::FailedRedemption: return FLinearColor(.34f,.22f,.12f,1.f);
+    case EShopEnding::Redeemed: return FLinearColor(.62f,.43f,.17f,1.f);
     default: return FLinearColor::White;
     }
 }
@@ -388,11 +610,13 @@ int32 UShopPresentationLibrary::GetPhasePageIndex(const UObject* WorldContextObj
     case EGamePhase::Sell: case EGamePhase::NightSell: return 3;
     case EGamePhase::DayEnd: return 4;
     case EGamePhase::DuskChoice: return 5;
-    case EGamePhase::Restock: case EGamePhase::Market: return 6;
-    case EGamePhase::Inside: case EGamePhase::InsideSell: case EGamePhase::History: return 7;
+    case EGamePhase::Restock: return 6;
+    case EGamePhase::Inside: case EGamePhase::InsideSell: return 7;
     case EGamePhase::Calm: return 8;
     case EGamePhase::NightEnd: return 9;
-    case EGamePhase::End: return 10;
+    case EGamePhase::End: case EGamePhase::EndingChoice: return 10;
+    case EGamePhase::History: return 11;
+    case EGamePhase::Market: return 12;
     default: return 0;
     }
 }

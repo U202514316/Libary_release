@@ -1,0 +1,218 @@
+{
+  "archive": "D:\\qqdownloads\\Package (1).zip",
+  "files": [
+    {
+      "file": "AMB_Inside.wav",
+      "sha256": "dcffe4637a7b424842eb88a59691b5be49445d917ec06522f2863172042247cd",
+      "bytes": 4805512,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "AMB_Rain.wav",
+      "sha256": "31cdd7a231f381e69020c6b1d32c642aad6e8926edff18211d70738d3c49172b",
+      "bytes": 16030536,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_End_Closed.wav",
+      "sha256": "d98e38066f1589f998c74921da32d4d878037ab4880750bd0fa1493f5d73ed8d",
+      "bytes": 11225896,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_End_Cycle.wav",
+      "sha256": "881531dd5a38bc5095f502fe8678aa4c56c01c79bfdcce9a36e8cded5c696cc0",
+      "bytes": 14641384,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_End_Release.wav",
+      "sha256": "22a26146acab01a025ef29be8d25d53e8eb26b6691d5439dbfdb636a2f5302d4",
+      "bytes": 17807136,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_End_Return.wav",
+      "sha256": "6d19338c2480575c86fd85364d2aa89c41b4ae502908a5fbea0f4c64e161b048",
+      "bytes": 13979880,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_Inside.wav",
+      "sha256": "5d0d118a04ba94edfcf01e8f0f40811ba5b8751fa77ad9d583e4a1a9cc5c432d",
+      "bytes": 29794330,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_Market.wav",
+      "sha256": "558c1611fa481a27ed53eafc875b1c47614aae022bde6115133488a8ecd081fa",
+      "bytes": 22581122,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_Shop_Day.wav",
+      "sha256": "4271a3923731f03bb00cb0243fb5345f16c9605de237856adf3336ba261c3dce",
+      "bytes": 31724994,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "BGM_Title.wav",
+      "sha256": "cfbb9ca3f68ce186735ab98e4b038f99a64119c34f6fbe83f0993585b6850dd3",
+      "bytes": 13547810,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Bell_01.wav",
+      "sha256": "bfa2887234187dd51f80a94457c774023dcabd869b0a1e9897c127ec48823ce4",
+      "bytes": 681218,
+      "duration": 3.86,
+      "sample_rate": 44100,
+      "channels": 2,
+      "sample_width": 2
+    },
+    {
+      "file": "SFX_Cash.wav",
+      "sha256": "d82aab590de2433c5c348b3a882b5d6f91b282bc6c0ba2e7d55151c40923a6f8",
+      "bytes": 782960,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Click.wav",
+      "sha256": "3f1019e36ff267d3a61f8ae5e6dc0e3400723ab0be6aaf795d8443179ce045f4",
+      "bytes": 1302832,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Close.wav",
+      "sha256": "4db7c1bae33e2d15ae9fea6b09f840cfb94438fa6144fe211afa0244e26ebb69",
+      "bytes": 1189312,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_DayEnd.wav",
+      "sha256": "e5be156c796c5d5dca4055bd20e23e9ab5649c0726d6b0e6eaf3093e4b431d44",
+      "bytes": 940984,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Decree.wav",
+      "sha256": "2b7160053f539dddbc0c936f89264f129ea2bc30e4a66ef145dcf7c50f4809df",
+      "bytes": 2026576,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Door_Inside.wav",
+      "sha256": "53670cfa6085abdb38f6116b19ae5ca94808d6f70f5b2cafb3547f4f7d3efa9e",
+      "bytes": 664832,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Ending.wav",
+      "sha256": "31c82e1cb4c094cdb1ea4f5cba51dfba24103f9ef75f4d4b2c064318d670dde4",
+      "bytes": 2087056,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Error.wav",
+      "sha256": "329519f2d6efe182d9064c911e5bb360e8275eee29bac5bfa6f1b655ef844d6f",
+      "bytes": 568322,
+      "duration": 3.22,
+      "sample_rate": 44100,
+      "channels": 2,
+      "sample_width": 2
+    },
+    {
+      "file": "SFX_History_Enter.wav",
+      "sha256": "9c28869cab422365f36739fa70d79f3189e8be2ed31feb6c00496cb05c2125a8",
+      "bytes": 1212936,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Loophole.wav",
+      "sha256": "12e82b03ab21dd0d50ce92b6d69894f0b544dfb4b78eef906d30435f547583cb",
+      "bytes": 2093360,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Market_Buy.wav",
+      "sha256": "c9d0942bd2f555ee97fb5d74fef6b5d2848e3970bc2f1dd81ced092648c140cf",
+      "bytes": 575056,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Market_Open.wav",
+      "sha256": "18221797220b3eac4e202d56173f909c6f97e63bab4c915c7754e1f5bd1ea860",
+      "bytes": 606560,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Market_Taboo.wav",
+      "sha256": "63d7ca1b84a9b63437daa2ba5b93a507af5bdaed46cf4d31c0bf80a93dea8396",
+      "bytes": 1365712,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Owl_Click.wav",
+      "sha256": "a6dc3b5b375a5c54f973ae907e63ba54b540d1c94a471c6ae7ef2f0cbdaf6ea6",
+      "bytes": 660112,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Owl_Hoot.wav",
+      "sha256": "08abe88dda44f9fd710e6d2a6168646e129e6827090fb84245eda805e4347a4e",
+      "bytes": 606560,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Page.wav",
+      "sha256": "3f33a22d407aaf9d7c8f2df034fafc73cf9fccf458f3f2b4704d91e9db48c13b",
+      "bytes": 672712,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Patience.wav",
+      "sha256": "f4eb11bae895b844273670dec9a678ee07b3b8dfc422f1a40b11aa08ec9b6619",
+      "bytes": 400232,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Pollution_01.wav",
+      "sha256": "96ec28a80fb98ae9dd69b96bf2da9e81fc2db2b482ec1cbbf7b5003af0644934",
+      "bytes": 666408,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Pollution_02.wav",
+      "sha256": "94b2b87314be7bc2f98e379425087b0b4752abd9dd7c7aa93648aa3044c0687c",
+      "bytes": 672712,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Pollution_03.wav",
+      "sha256": "992421dfe773c17fd90f10dd85280a6716c2f9ce8bec2499bf5c600431a528d6",
+      "bytes": 667984,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Whisper.wav",
+      "sha256": "995aefc7889353ab286e3330ff1bda3c804fa7867f7bee9d15c9bbef2cd45120",
+      "bytes": 844384,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "UI_Hover.wav",
+      "sha256": "6dd615b89a11edd5da959e6e96ded6972a688108693381a3e2e5357ee5580233",
+      "bytes": 606560,
+      "wave_error": "unknown format: 3"
+    },
+    {
+      "file": "SFX_Bell_02.wav",
+      "sha256": "bfa2887234187dd51f80a94457c774023dcabd869b0a1e9897c127ec48823ce4",
+      "bytes": 681218,
+      "duration": 3.86,
+      "sample_rate": 44100,
+      "channels": 2,
+      "sample_width": 2
+    }
+  ]
+}

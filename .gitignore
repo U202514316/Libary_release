@@ -82,3 +82,7 @@ Platforms/
 
 # Microsoft Office temporary lock files
 ~$*
+
+# Python generated caches
+__pycache__/
+*.py[cod]

@@ -105,6 +105,7 @@ bool ShopCustomers::GenerateForTime(FShopRunState& State, const FShopCatalog& Ca
     if (!Rules.bDaytimeOnlyLoop && !bNight && State.Day > Rules.DaysPerWeek) Count += Rules.WeekTwoCustomerBonus;
     if (State.CustomerPenalty < 0) return CustomerFail(Error, LOCTEXT("InvalidCustomerPenalty", "永久顾客惩罚配置无效。"));
     if (!Rules.bDaytimeOnlyLoop) Count -= State.CustomerPenalty;
+    else if (Rules.bApplyDaytimeCustomerPenalty) Count = FMath::Max<int64>(1, Count - State.CustomerPenalty);
     if (bNight)
         for (const FShopModifier& Modifier : State.Modifiers)
             if (Modifier.Type == EShopEffectType::CustomerCountDelta && (Modifier.EndTurn < 0 || State.Turn < Modifier.EndTurn)) Count += Modifier.Amount;

@@ -33,6 +33,12 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
 {
     Error = FText();
     const FRunRules& R = C.Rules;
+    if (!FMath::IsFinite(R.HistoryFragmentChance) || R.HistoryFragmentChance < 0.f || R.HistoryFragmentChance > 1.f || R.MarketBookPollution < 0)
+        return Fail(Error, TEXT("DT_RunRules: invalid fragment chance or market purchase pollution"));
+    if (R.bUseHistoryFragments && (!R.bEnableHistory || C.Events.Num() != 7))
+        return Fail(Error, TEXT("History fragments require enabled history and exactly seven authored pages"));
+    if (R.bSecretBookMarket && (!R.bDaytimeOnlyLoop || !R.bEnableMarket))
+        return Fail(Error, TEXT("Secret-book market requires enabled market and the daytime loop"));
     if (R.bUniqueDailyCustomerPortraits && !R.bDaytimeOnlyLoop)
         return Fail(Error, TEXT("DT_RunRules.Default: unique daily portraits require the three-customer daytime loop"));
     if (R.StartMoney < 0 || R.StartPsychic < 0 || R.StartPollution < 0 || R.StartEnlighten < 0 || R.MaxDays < 1 || R.MaxDays > 100000 ||
@@ -41,11 +47,11 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
         return Fail(Error, TEXT("DT_RunRules.Default: invalid start resources, days, rent or ending rules"));
     if (!(0 < R.LightThreshold && R.LightThreshold < R.MediumThreshold && R.MediumThreshold < R.HeavyThreshold && R.HeavyThreshold < R.PollutionLimit))
         return Fail(Error, TEXT("DT_RunRules.Default: pollution thresholds must satisfy 0 < Light < Medium < Heavy < Limit"));
-    if (R.PsychicMax < 1 || R.StartPsychic > R.PsychicMax || R.StartPollution >= R.PollutionLimit ||
+    if (R.StartPollution >= R.PollutionLimit ||
         !FMath::IsFinite(R.PatienceDropRatePolluted) || R.PatienceDropRatePolluted < 0.f || R.PatienceDropRatePolluted > 10.f)
-        return Fail(Error, TEXT("DT_RunRules.Default: invalid psychic cap, initial pollution or patience drain rate"));
+        return Fail(Error, TEXT("DT_RunRules.Default: invalid initial pollution or patience drain rate"));
     const int32 NonnegativeRules[] = { R.EmergencyPollutionCut, R.EmergencyMoneyCost, R.LightSpreadPerNight,
-        R.NightlyPsychicGain, R.NightlySecretSupply, R.SecretOwnedCap,
+        R.NightlyPsychicGain, R.NightlySecretSupply, R.SecretOwnedCap, R.HistoryFragmentEnlightenGain,
         R.FakeCustomerPollutionPerSecond, R.FakeCustomerMaxPollution, R.AlteredBookReadPollution,
         R.ReturnedBookReadPollution, R.ReturnedBookSellPollution, R.ReturnedBookFallbackPollution,
         R.PermanentRentPenalty, R.PermanentCustomerPenalty, R.MaxRentPenalty, R.MaxCustomerPenalty, R.DecreeCooldownTurns };
@@ -133,6 +139,8 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
     {
         const FEventData& E = Pair.Value;
         const FString Row = TEXT("DT_Events.") + Pair.Key.ToString();
+        if (R.bUseHistoryFragments && (!E.bEnabled || E.Title.IsEmpty() || E.Text.IsEmpty() || E.Trigger != EShopEventTrigger::OnRead))
+            return Fail(Error, Row + TEXT(": history fragments need enabled OnRead rows with a title and full text"));
         if ((!E.Id.IsNone() && E.Id != Pair.Key) || !StaticEnum<EShopEventTrigger>()->IsValidEnumValue(static_cast<int64>(E.Trigger)) ||
             E.MinDay < 1 || E.MaxDay < E.MinDay || !FMath::IsFinite(E.Chance) || E.Chance < 0.f || E.Chance > 1.f ||
             (!E.RequiredBookId.IsNone() && !C.Books.Contains(E.RequiredBookId))) return Fail(Error, Row + TEXT(": invalid event identity, trigger or probability"));
@@ -141,6 +149,12 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
     for (const auto& Pair : C.MarketItems)
     {
         const FMarketItemData& M = Pair.Value;
+        if (R.bSecretBookMarket)
+        {
+            const FBookData* Book = C.Books.Find(M.SecretBookId);
+            if (!Book || Book->Layer != EBookLayer::Inside || Book->BookType != EBookType::Secret || M.Price <= 0 || M.bOnePerRun)
+                return Fail(Error, TEXT("DT_MarketItems: weekly secret-book offers require an inside book, positive price and repeat weeks"));
+        }
         const FString Row = TEXT("DT_MarketItems.") + Pair.Key.ToString();
         if ((!M.Id.IsNone() && M.Id != Pair.Key) || M.Price < 0 || M.Week < 0 || M.DisplayName.IsEmpty()) return Fail(Error, Row + TEXT(": invalid market item"));
         if (!EffectsValid(M.TabooCost, C, Row, Error) || !EffectsValid(M.Effect, C, Row, Error) || !EffectsValid(M.SideEffect, C, Row, Error)) return false;
@@ -165,21 +179,47 @@ bool ShopValidation::Validate(const FShopCatalog& C, FText& Error)
             !StaticEnum<EShopEnding>()->IsValidEnumValue(static_cast<int64>(E.Ending)) ||
             !StaticEnum<EShopEndingCondition>()->IsValidEnumValue(static_cast<int64>(E.Condition)) ||
             E.Priority < 0 || E.Title.IsEmpty() || E.Text.IsEmpty() ||
-            E.NegativeDaysRequired < 1 || E.PollutionThreshold < 1 || E.MinEnlighten < 0 || E.MaxPollutionExclusive < 1 || E.MinMoney < 0 ||
+            E.NegativeDaysRequired < 1 || E.PollutionThreshold < 1 || E.MinEnlighten < 0 || E.MaxPollutionExclusive < 1 || E.MinMoney < 0 || E.RedemptionCost < 0 ||
             EndingKinds.Contains(E.Ending) || EndingConditions.Contains(E.Condition) || Priorities.Contains(E.Priority))
             return Fail(Error, TEXT("DT_Endings: invalid or duplicate ending, condition, priority, text or thresholds"));
         if (E.Condition == EShopEndingCondition::PollutionLimit && E.PollutionThreshold != R.PollutionLimit)
             return Fail(Error, TEXT("DT_Endings: pollution threshold must match RunRules.PollutionLimit"));
+        if ((E.bRequiresPlayerChoice && (E.Ending != EShopEnding::Returned || E.Condition != EShopEndingCondition::FinalThresholds)) ||
+            (E.RedemptionCost > 0 && (E.RedemptionCost > E.MinMoney ||
+                (E.Condition != EShopEndingCondition::FinalMoneyAtLeast && !(E.Condition == EShopEndingCondition::FinalThresholds && E.bRequireMoney)))))
+            return Fail(Error, TEXT("DT_Endings: only qualified Returned may ask for a choice; redemption must be affordable and final-only"));
         EndingKinds.Add(E.Ending); EndingConditions.Add(E.Condition); Priorities.Add(E.Priority);
         if (E.Condition == EShopEndingCondition::FinalFallback) FallbackPriority = E.Priority;
     }
     if (!C.Endings.IsEmpty())
     {
-        if (C.Endings.Num() != 4 || FallbackPriority < 0) return Fail(Error, TEXT("DT_Endings: all four ending conditions are required"));
-        for (int32 Priority : Priorities) if (Priority > FallbackPriority) return Fail(Error, TEXT("DT_Endings: fallback must have the last priority"));
+        const bool Modern = EndingConditions.Contains(EShopEndingCondition::FinalMoneyBelow) || EndingConditions.Contains(EShopEndingCondition::FinalMoneyAtLeast);
+        if (Modern)
+        {
+            auto Find = [&C](EShopEnding Kind) -> const FEndingData*
+            { for (const auto& Entry : C.Endings) if (Entry.Value.Ending == Kind) return &Entry.Value; return nullptr; };
+            const FEndingData* Closed = Find(EShopEnding::Closed), *Pollution = Find(EShopEnding::PollutionReleased),
+                *Failed = Find(EShopEnding::FailedRedemption), *Returned = Find(EShopEnding::Returned), *Redeemed = Find(EShopEnding::Redeemed);
+            if (C.Endings.Num() != 5 || !Closed || !Pollution || !Failed || !Returned || !Redeemed ||
+                Closed->Condition != EShopEndingCondition::NegativeBalance || Pollution->Condition != EShopEndingCondition::PollutionLimit ||
+                Failed->Condition != EShopEndingCondition::FinalMoneyBelow || Returned->Condition != EShopEndingCondition::FinalThresholds ||
+                Redeemed->Condition != EShopEndingCondition::FinalMoneyAtLeast || !Returned->bRequireMoney || !Returned->bRequiresPlayerChoice ||
+                Failed->MinMoney != Returned->MinMoney || Failed->MinMoney != Redeemed->MinMoney ||
+                Returned->RedemptionCost != Returned->MinMoney || Redeemed->RedemptionCost != Redeemed->MinMoney ||
+                // Older saved five-ending tables put Closed before Pollution. Both are valid:
+                // the resolver now enforces terminal pollution before consulting table priorities.
+                FMath::Max(Pollution->Priority, Closed->Priority) >= Failed->Priority ||
+                Failed->Priority >= Returned->Priority || Returned->Priority >= Redeemed->Priority)
+                return Fail(Error, TEXT("DT_Endings: five documented endings require matching redemption thresholds/costs and terminal failures before Insufficient funds > Return choice > Redeemed"));
+        }
+        else
+        {
+            if (C.Endings.Num() != 4 || FallbackPriority < 0) return Fail(Error, TEXT("DT_Endings: legacy tables require all four ending conditions"));
+            for (int32 Priority : Priorities) if (Priority > FallbackPriority) return Fail(Error, TEXT("DT_Endings: fallback must have the last priority"));
+        }
     }
-    if (R.bRequireCoreContentCounts && (TableCount != 9 || InsideCount != 7 || Kinds.Num() != 4 || C.Decrees.Num() != 7 || EnabledDecrees != 7 || C.Endings.Num() != 4))
-        return Fail(Error, TEXT("Core validation requires 9 surface + 7 inside books, 4 customer kinds, 7 enabled decrees and 4 endings; history may be deferred"));
+    if (R.bRequireCoreContentCounts && (TableCount != 9 || InsideCount != 7 || Kinds.Num() != 4 || C.Decrees.Num() != 7 || EnabledDecrees != 7 || (C.Endings.Num() != 4 && C.Endings.Num() != 5)))
+        return Fail(Error, TEXT("Core validation requires 9 surface + 7 inside books, 4 customer kinds, 7 enabled decrees and a complete legacy/current ending table; history may be deferred"));
     if (R.bRequireFinalContentCounts && (TableCount != 9 || InsideCount != 7 || Kinds.Num() != 4 || C.Decrees.Num() != 7 || EnabledDecrees != 7 || C.Events.IsEmpty()))
         return Fail(Error, TEXT("Final content validation requires 9 surface + 7 inside books, 4 customer kinds, 7 enabled decrees and authored events"));
     return true;

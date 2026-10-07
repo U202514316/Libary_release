@@ -40,7 +40,7 @@ namespace ShopDecreeReleaseTests
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShopDecreePollutionReleaseTest,
-    "Bookstore.ProgramA.ReleaseDecrees.NextPollutionAndPsychicCap",
+    "Bookstore.ProgramA.ReleaseDecrees.NextPollutionAndUnlimitedPsychic",
     EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FShopDecreePollutionReleaseTest::RunTest(const FString& Parameters)
 {
@@ -64,7 +64,18 @@ bool FShopDecreePollutionReleaseTest::RunTest(const FString& Parameters)
     State.Psychic = 99;
     TestTrue(TEXT("Psychic reward applies"), ShopEffects::Apply(State, Catalog,
         { Effect(EShopEffectType::Psychic, 8) }, TEXT("reward"), -1, false, Error));
-    TestEqual(TEXT("Psychic saturates at configured maximum"), State.Psychic, Catalog.Rules.PsychicMax);
+    TestEqual(TEXT("Psychic reward crosses the former cap"), State.Psychic, 107);
+    Catalog.Rules.PsychicMax = 100; // Old saved tables must not restore a gameplay cap.
+    TestTrue(TEXT("Psychic cost works above the former cap"), ShopEffects::Apply(State, Catalog,
+        { Effect(EShopEffectType::Psychic, -8) }, TEXT("cost"), -1, true, Error));
+    TestEqual(TEXT("Only the cost is deducted"), State.Psychic, 99);
+    TestFalse(TEXT("Insufficient psychic cost still rejects"), ShopEffects::Apply(State, Catalog,
+        { Effect(EShopEffectType::Psychic, -100) }, TEXT("cost"), -1, true, Error));
+    TestEqual(TEXT("Rejected cost preserves psychic"), State.Psychic, 99);
+    State.Psychic = MAX_int32 - 3;
+    TestFalse(TEXT("Psychic integer overflow rejects instead of wrapping"), ShopEffects::Apply(State, Catalog,
+        { Effect(EShopEffectType::Psychic, 8) }, TEXT("reward"), -1, false, Error));
+    TestEqual(TEXT("Overflow preserves psychic"), State.Psychic, MAX_int32 - 3);
     State.Pollution = 99;
     TestTrue(TEXT("Pollution reaches limit"), ShopEffects::ChangePollution(State, Catalog, 1, Error));
     TestTrue(TEXT("Subsequent reduction applies"), ShopEffects::ChangePollution(State, Catalog, -50, Error));

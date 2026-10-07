@@ -33,6 +33,11 @@ public:
     virtual bool RequestContinue_Implementation() override;
     virtual bool RequestRestock_Implementation(FName BookId) override;
     virtual bool RequestNextDay_Implementation() override;
+    virtual FShopCommandResult RequestChooseEnding_Implementation(EShopFinalChoice Choice) override;
+
+    /** Explicitly replaces the current run with an editor-only final-state fixture. Never called by normal play. */
+    UFUNCTION(BlueprintCallable, Category="Bookstore|Editor Testing", meta=(DevelopmentOnly))
+    bool PrepareEndingTest(EShopEndingTest Preset);
     virtual FShopCommandResult RequestObserveCustomer_Implementation(int32 CustomerIndex) override;
     virtual FShopCommandResult RequestRejectCustomer_Implementation(int32 CustomerIndex) override;
     virtual FShopCommandResult RequestOpenInside_Implementation() override;
@@ -45,6 +50,7 @@ public:
     virtual FShopCommandResult RequestEndNight_Implementation() override;
     virtual FShopCommandResult RequestPurify_Implementation(int32 Amount) override;
     virtual FShopCommandResult RequestEnactDecree_Implementation(FName DecreeId) override;
+    virtual FShopCommandResult RequestOpenDecrees_Implementation() override;
     virtual FShopCommandResult RequestSkipDecree_Implementation() override;
     virtual FShopCommandResult RequestHistoryChoice_Implementation(EHistoryChoice Choice) override;
     virtual FShopCommandResult RequestOwlTalk_Implementation() override;
@@ -58,6 +64,11 @@ public:
     UFUNCTION(BlueprintPure, Category="Bookstore|Service") FText GetLastError() const { return LastResult.Message; }
     UFUNCTION(BlueprintPure, Category="Bookstore|Service") FShopCommandResult GetLastResult() const { return LastResult; }
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") TArray<FName> GetBookIds() const;
+    UFUNCTION(BlueprintPure, Category="Bookstore|Data") TArray<FName> GetDecreeIds() const;
+    UFUNCTION(BlueprintPure, Category="Bookstore|Config") FRunRules GetRunRules() const { return Catalog.Rules; }
+    UFUNCTION(BlueprintPure, Category="Bookstore|Inventory") bool CanReadSecret(FName BookId, FText& Reason) const;
+    UFUNCTION(BlueprintPure, Category="Bookstore|Market") bool CanOpenMarket() const;
+    UFUNCTION(BlueprintPure, Category="Bookstore|Market") bool CanBuyMarketItem(FName Id, FText& Reason) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetBookRuntime(FName BookId, FBookRuntime& Book) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetDecreeInfo(FName Id, FDecreeData& Decree) const;
     UFUNCTION(BlueprintPure, Category="Bookstore|Data") bool GetMarketItemInfo(FName Id, FMarketItemData& Item) const;
@@ -103,6 +114,7 @@ private:
     void QueueEvents(FShopRunState& Next, EShopEventTrigger Trigger, FName BookId = NAME_None);
     void DispatchModal(FShopRunState& Next);
     void CheckEnding(FShopRunState& Next, bool bFinal = false) const;
+    void FinishEnding(FShopRunState& Next, const FEndingData& Ending) const;
     bool SettleNight(FShopRunState& Next, FText& Error);
     bool OpenMarketInternal(FShopRunState& Next, FText& Error);
     void CompleteCustomer(FShopRunState& Next, int32 Index, EShopActionResult Code);

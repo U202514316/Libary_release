@@ -14,7 +14,7 @@ UENUM(BlueprintType)
 enum class EShopStatField : uint8 { Day, Money, Psychic, Pollution, Income, Expense, Queue, Stock, Enlighten };
 
 UENUM(BlueprintType)
-enum class EShopBookAction : uint8 { Sell, Buy, List, Unlist };
+enum class EShopBookAction : uint8 { Sell, Buy, List, Unlist, Read, BuySecret };
 
 /** Read-only presentation values for user-authored Widget Blueprints. Never creates or modifies widgets. */
 UCLASS()
@@ -79,10 +79,57 @@ public:
     UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
     static bool CanChooseDecree(const UObject* WorldContextObject, int32 Index);
 
+    /** Catalogue previews never draw candidates or enact a decree. Confirmation still uses ShopService. */
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetDecreeNameById(const UObject* WorldContextObject, FName DecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetDecreeDescriptionById(const UObject* WorldContextObject, FName DecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetDecreeSummaryById(const UObject* WorldContextObject, FName DecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetDecreeAvailabilityText(const UObject* WorldContextObject, FName DecreeId, bool bCompact = false);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static bool CanConfirmDecree(const UObject* WorldContextObject, FName DecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static bool HasDecreeSelection(const UObject* WorldContextObject, FName DecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation")
+    static FLinearColor GetDecreeSelectionColor(FName DecreeId, FName SelectedDecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FLinearColor GetDecreeCardTint(const UObject* WorldContextObject, FName DecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation")
+    static ESlateVisibility GetUnselectedDecreeVisibility(FName SelectedDecreeId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static ESlateVisibility GetEmergencyDecreeVisibility(const UObject* WorldContextObject);
+
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static ESlateVisibility GetDecreeEntryVisibility(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetDecreeStatusText(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetBacklashLogText(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetLatestBacklashText(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetHistoryTitle(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetHistoryBody(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetHistoryProgress(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static bool CanVisitBlackMarket(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static ESlateVisibility GetBlackMarketVisibility(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetMarketBookDescription(const UObject* WorldContextObject, FName BookId);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static FText GetReadButtonText(const UObject* WorldContextObject, FName BookId);
+
     UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
     static FText GetEndingTitle(const UObject* WorldContextObject);
     UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
     static FText GetEndingText(const UObject* WorldContextObject);
+    UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
+    static ESlateVisibility GetEndingChoiceVisibility(const UObject* WorldContextObject, bool bChoice);
     UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))
     static FText GetEndingConditionText(const UObject* WorldContextObject);
     UFUNCTION(BlueprintPure, Category="Bookstore|Presentation", meta=(WorldContext="WorldContextObject"))

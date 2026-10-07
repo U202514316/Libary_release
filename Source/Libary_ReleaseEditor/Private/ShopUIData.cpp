@@ -8,6 +8,11 @@
 #include "UObject/MetaData.h"
 #include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogShopUIData, Log, All);
 
@@ -59,6 +64,9 @@ namespace
         Rules->WeekTwoCustomerBonus = 0;
         Rules->InsideCustomers = 0;
         Rules->StartPsychic = 8;
+        Rules->MaxDays = 35; // Full calendar; short verification fixtures remain transient.
+        Rules->bReturnRequiresRedeemTarget = true;
+        Rules->PsychicMax = 0; // Legacy field; rewards are no longer capped.
         Rules->NightlyPsychicGain = 8;
         Rules->NightlySecretSupply = 1;
         Rules->SecretOwnedCap = 7;
@@ -109,13 +117,18 @@ namespace
             && ReplaceCost(Table, TEXT("gold_01"), EShopEffectType::RemoveClue, 40);
     }
 
-    bool Validate(const TArray<TStrongObjectPtr<UDataTable>>& Sources, UDataTable* Rules, UDataTable* Decrees)
+    bool Validate(const TArray<TStrongObjectPtr<UDataTable>>& Sources, UDataTable* Rules, UDataTable* Decrees,
+        UDataTable* Events = nullptr, UDataTable* Market = nullptr)
     {
         FShopCatalog Catalog;
         TMap<FName, FRunRules> RuleRows;
+        if (!ReadRows(Rules, RuleRows) || RuleRows.Num() != 1) return false;
+        const FRunRules& SelectedRules = RuleRows.CreateConstIterator().Value();
+        if (!Events) Events = SelectedRules.bUseHistoryFragments ? LoadTable(FString(UIRoot) + TEXT("DT_Events_UI")) : Sources[4].Get();
+        if (!Market) Market = SelectedRules.bSecretBookMarket ? LoadTable(FString(UIRoot) + TEXT("DT_MarketItems_UI")) : Sources[5].Get();
         if (!ReadRows(Sources[0].Get(), Catalog.Books) || !ReadRows(Sources[1].Get(), Catalog.Customers)
             || !ReadRows(Rules, RuleRows) || !ReadRows(Decrees, Catalog.Decrees)
-            || !ReadRows(Sources[4].Get(), Catalog.Events) || !ReadRows(Sources[5].Get(), Catalog.MarketItems)
+            || !ReadRows(Events, Catalog.Events) || !ReadRows(Market, Catalog.MarketItems)
             || !ReadRows(Sources[6].Get(), Catalog.OwlLines) || !ReadRows(Sources[7].Get(), Catalog.Endings)) return false;
         if (RuleRows.Num() != 1)
         {
@@ -123,9 +136,9 @@ namespace
             return false;
         }
         Catalog.Rules = RuleRows.CreateConstIterator().Value();
-        if (!Catalog.Rules.bDaytimeOnlyLoop || Catalog.Rules.bEnableHistory || Catalog.Rules.bEnableMarket)
+        if (!Catalog.Rules.bDaytimeOnlyLoop)
         {
-            UE_LOG(LogShopUIData, Error, TEXT("UI rules require daytime-only trading with History and Market disabled; adjust the existing UI table manually."));
+            UE_LOG(LogShopUIData, Error, TEXT("UI rules require daytime-only trading."));
             return false;
         }
         // User-adjusted numbers are valid as long as the catalog's runtime contract remains valid.
@@ -137,6 +150,106 @@ namespace
         }
         return true;
     }
+}
+
+bool ShopUIData::UpgradeHistoryMarketDecrees()
+{
+    TArray<TStrongObjectPtr<UDataTable>> Sources;
+    for (const TCHAR* Name : SourceNames)
+    {
+        UDataTable* Source = LoadTable(FString(ReleaseRoot) + Name);
+        if (!Source) return false;
+        Sources.Emplace(Source);
+    }
+    UDataTable* Rules = LoadTable(FString(UIRoot) + UINames[0]);
+    UDataTable* Decrees = LoadTable(FString(UIRoot) + UINames[1]);
+    if (!Rules || !Decrees || Rules->GetRowStruct() != FRunRules::StaticStruct() || Rules->GetRowNames().Num() != 1) return false;
+    TStrongObjectPtr<UDataTable> Candidate(DuplicateObject<UDataTable>(Rules, GetTransientPackage()));
+    const FName RuleId = Candidate->GetRowNames()[0];
+    FRunRules* Row = Candidate->FindRow<FRunRules>(RuleId, TEXT("HistoryMarketMigration"));
+    Row->bEnableHistory = Row->bUseHistoryFragments = true;
+    Row->HistoryFragmentChance = .3f; Row->ReadPsychicGain = 10; Row->PollutionOnRead = 10; Row->ClueDropChance = 0.f;
+    Row->HistoryFragmentEnlightenGain = 10;
+    Row->bEnableMarket = Row->bSecretBookMarket = true; Row->MarketBookPollution = 5; Row->DaysPerWeek = 7;
+    Row->bApplyDaytimeCustomerPenalty = true;
+    TStrongObjectPtr<UDataTable> Events(NewObject<UDataTable>()); Events->RowStruct = FEventData::StaticStruct();
+    TStrongObjectPtr<UDataTable> Market(NewObject<UDataTable>()); Market->RowStruct = FMarketItemData::StaticStruct();
+    FString Json; TSharedPtr<FJsonObject> Root;
+    if (!FFileHelper::LoadFileToString(Json, *(FPaths::ProjectDir()/TEXT("SourceArt/History/history_fragments.json"))) ||
+        !FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json), Root) || !Root.IsValid()) return false;
+    const TArray<TSharedPtr<FJsonValue>>* Fragments = nullptr;
+    if (!Root->TryGetArrayField(TEXT("fragments"), Fragments) || Fragments->Num() != 7) return false;
+    for (const TSharedPtr<FJsonValue>& Value : *Fragments)
+    {
+        const TSharedPtr<FJsonObject> Page = Value->AsObject(); FString Id, Title, Body;
+        if (!Page || !Page->TryGetStringField(TEXT("id"), Id) || !Page->TryGetStringField(TEXT("title"), Title) || !Page->TryGetStringField(TEXT("text"), Body)) return false;
+        FEventData Event; Event.Id = FName(*Id); Event.Title = FText::FromString(Title); Event.Text = FText::FromString(Body);
+        Event.OptionA = FText::FromString(TEXT("收好残页 · 返回")); Events->AddRow(Event.Id, Event);
+    }
+    for (const auto& Pair : Sources[0]->GetRowMap())
+    {
+        const FBookData* Book = Sources[0]->FindRow<FBookData>(Pair.Key, TEXT("MarketMigration"));
+        if (!Book || Book->Layer != EBookLayer::Inside || Book->BookType != EBookType::Secret) continue;
+        FMarketItemData Item; Item.Id = Pair.Key; Item.SecretBookId = Pair.Key; Item.DisplayName = Book->DisplayName;
+        Item.Category = TEXT("SecretBook"); Item.Price = FMath::Max(1, FMath::RoundToInt(Book->Price * .5f)); Item.bOnePerRun = false;
+        Market->AddRow(Item.Id, Item);
+    }
+    // Preserve already-authored extension tables on reruns; import never silently replaces edits.
+    const TCHAR* Names[] = {TEXT("DT_Events_UI"), TEXT("DT_MarketItems_UI")};
+    UDataTable* Tables[] = {Events.Get(), Market.Get()}; bool Existing[] = {false, false};
+    for (int32 Index=0; Index<2; ++Index)
+    {
+        const FString Path = FString(UIRoot) + Names[Index];
+        if (FPackageName::DoesPackageExist(Path)) { Existing[Index] = true; Tables[Index] = LoadTable(Path); if (!Tables[Index]) return false; }
+    }
+    if (!Validate(Sources, Candidate.Get(), Decrees, Tables[0], Tables[1])) return false;
+    for (int32 Index=0; Index<2; ++Index)
+    {
+        if (Existing[Index]) continue;
+        UPackage* Package = CreatePackage(*(FString(UIRoot) + Names[Index]));
+        UDataTable* Saved = DuplicateObject<UDataTable>(Tables[Index], Package, Names[Index]);
+        Saved->ClearFlags(RF_Transient); Saved->SetFlags(RF_Public | RF_Standalone);
+        if (!ShopUIAuthoring::Save(Saved)) return false;
+        FAssetRegistryModule::AssetCreated(Saved);
+    }
+    Rules->AddRow(RuleId, *Row);
+    if (!ShopUIAuthoring::Save(Rules)) return false;
+    UE_LOG(LogShopUIData, Display, TEXT("HISTORY/MARKET/DECREE DATA READY: 7 exact document texts, 7 secret-book offers; only explicit feature rules changed."));
+    return true;
+}
+
+bool ShopUIData::Restore35Days()
+{
+    TArray<TStrongObjectPtr<UDataTable>> Sources;
+    for (const TCHAR* Name : SourceNames)
+    {
+        UDataTable* Source=LoadTable(FString(ReleaseRoot)+Name);
+        if (!Source) return false;
+        Sources.Emplace(Source);
+    }
+    UDataTable* Rules=LoadTable(FString(UIRoot)+UINames[0]);
+    UDataTable* Decrees=LoadTable(FString(UIRoot)+UINames[1]);
+    if (!Rules || !Decrees || Rules->GetRowStruct()!=FRunRules::StaticStruct() || Rules->GetRowNames().Num()!=1) return false;
+    const FString Directory=FPaths::ProjectSavedDir()/TEXT("UIBuild/Restore35Days");
+    IFileManager::Get().MakeDirectory(*Directory,true);
+    const auto Export=[&Directory](UDataTable* Table,const FString& Name)
+    {
+        return FFileHelper::SaveStringToFile(Table->GetTableAsJSON(EDataTableExportFlags::UseJsonObjectsForStructs),
+            *(Directory/(Name+TEXT(".json"))),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+    };
+    if (!Export(Rules,TEXT("DT_RunRules_UI_Before"))) return false;
+    TStrongObjectPtr<UDataTable> Candidate(DuplicateObject<UDataTable>(Rules,GetTransientPackage()));
+    const FName RuleId=Candidate->GetRowNames()[0];
+    FRunRules* Row=Candidate->FindRow<FRunRules>(RuleId,TEXT("Restore35Days"));
+    const int32 Before=Row->MaxDays;
+    Row->MaxDays=35;
+    if (!Validate(Sources,Candidate.Get(),Decrees)) return false;
+    Rules->AddRow(RuleId,*Row);
+    if (!ShopUIAuthoring::Save(Rules) || !Export(Rules,TEXT("DT_RunRules_UI"))) return false;
+    for (UDataTable* Table : {Sources[0].Get(),Sources[1].Get(),Decrees})
+        if (!Export(Table,Table->GetName())) return false;
+    UE_LOG(LogShopUIData,Display,TEXT("Restored UI MaxDays %d -> 35; all other rule fields, business data and widgets preserved."),Before);
+    return true;
 }
 
 bool ShopUIData::Build(bool bUpgradeCounterFlow, bool bUpgradeUniquePortraits)
@@ -190,9 +303,8 @@ bool ShopUIData::Build(bool bUpgradeCounterFlow, bool bUpgradeUniquePortraits)
         UDataTable* Table = Candidates[0].Get();
         if (Table->GetRowStruct() != FRunRules::StaticStruct() || Table->GetRowNames().Num() != 1) return false;
         FRunRules* Rules = Table->FindRow<FRunRules>(Table->GetRowNames()[0], TEXT("CounterFlowMigration"));
-        UE_LOG(LogShopUIData, Display, TEXT("Explicit UI counter-flow migration: MaxDays %d -> 35; arrival %d [%.2f, %.2f] -> enabled [2, 4]. Other authored values are preserved."),
+        UE_LOG(LogShopUIData, Display, TEXT("Explicit UI counter-flow migration: preserve MaxDays %d; arrival %d [%.2f, %.2f] -> enabled [2, 4]. Other authored values are preserved."),
             Rules->MaxDays, Rules->bUseCustomerArrivalDelay, Rules->CustomerArrivalMin, Rules->CustomerArrivalMax);
-        Rules->MaxDays = 35;
         Rules->bUseCustomerArrivalDelay = true;
         Rules->CustomerArrivalMin = 2.f;
         Rules->CustomerArrivalMax = 4.f;

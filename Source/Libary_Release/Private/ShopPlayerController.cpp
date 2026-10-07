@@ -3,12 +3,14 @@
 #include "ShopView.h"
 #include "Blueprint/UserWidget.h"
 #include "Engine/GameInstance.h"
+#include "ShopAudioComponent.h"
 
 AShopPlayerController::AShopPlayerController()
 {
     bShowMouseCursor = true;
     bEnableClickEvents = true;
     bEnableMouseOverEvents = true;
+    ShopAudio = CreateDefaultSubobject<UShopAudioComponent>(TEXT("ShopAudio"));
 }
 
 UShopRunSubsystem* AShopPlayerController::GetShopRun() const
@@ -17,10 +19,20 @@ UShopRunSubsystem* AShopPlayerController::GetShopRun() const
     return Instance ? Instance->GetSubsystem<UShopRunSubsystem>() : nullptr;
 }
 
+void AShopPlayerController::ShopTestEnding(FString Preset)
+{
+    UShopRunSubsystem* Run = GetShopRun();
+    const int64 Value = StaticEnum<EShopEndingTest>()->GetValueByNameString(Preset);
+    if (!Run || Value == INDEX_NONE || !Run->PrepareEndingTest(static_cast<EShopEndingTest>(Value)))
+        ClientMessage(TEXT("PIE only. Usage: ShopTestEnding EmptyShelf | Pollution | Closed | TruthChoice | Redeemed"));
+    else ClientMessage(TEXT("Created an ending test run. The previous run was replaced; normal saved rules are unchanged."));
+}
+
 void AShopPlayerController::BeginPlay()
 {
     Super::BeginPlay();
     if (!IsLocalController()) return;
+    ShopAudio->InitializeAudio(AudioPalette);
     FInputModeGameAndUI Mode;
     Mode.SetHideCursorDuringCapture(false);
     Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);

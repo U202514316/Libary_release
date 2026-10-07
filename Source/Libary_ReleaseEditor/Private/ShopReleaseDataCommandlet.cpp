@@ -1,4 +1,5 @@
 #include "ShopReleaseDataCommandlet.h"
+#include "ShopEndingAuthoring.h"
 #include "ShopRunSubsystem.h"
 #include "ShopTypes.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -17,7 +18,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogShopReleaseData, Log, All);
 namespace
 {
     constexpr const TCHAR* Root = TEXT("/Game/ProgramA/Release/Data/");
-    constexpr const TCHAR* ContentNotice = TEXT("Program A reviewed data, 2026-10-06: 16 books, 4 customer templates, 7 enabled decrees, 4 endings. Initial inventory is owned; progressive-book sales grant +2 Enlighten with 50% probability. History is deferred by the user; market and owl authored content remain Program B scope. See Docs/正式数据导入记录.md for source rows and implementation decisions.");
+    constexpr const TCHAR* ContentNotice = TEXT("Reviewed release baseline, 2026-10-07: 16 books, 4 customer templates, 7 enabled decrees, 5 endings from SourceData/Endings. Initial inventory is owned; progressive-book sales grant +2 Enlighten with 50% probability. The running project uses separate UI rules for the 35-day calendar, history and market features. See Docs/控件蓝图闭环使用说明.md for current behavior.");
     const TCHAR* Names[] = { TEXT("DT_Books"), TEXT("DT_Customers"), TEXT("DT_RunRules"), TEXT("DT_Decrees"), TEXT("DT_Events"), TEXT("DT_MarketItems"), TEXT("DT_Owl"), TEXT("DT_Endings") };
 
     struct FTables
@@ -132,8 +133,8 @@ namespace
             Row.PsychicYield = Source.Psychic;
             Row.PollutionYield = Source.Pollution;
             Row.SealLevel = Source.Seal;
-            Row.SaleEnlightenChance = Source.bProgressive ? 0.5f : 0.f;
-            Row.SaleEnlightenYield = Source.bProgressive ? 2 : 0;
+            Row.SaleEnlightenChance = Source.Layer == EBookLayer::Inside ? 1.f : Source.bProgressive ? 0.5f : 0.f;
+            Row.SaleEnlightenYield = Source.Layer == EBookLayer::Inside ? 5 : Source.bProgressive ? 2 : 0;
             Row.EnlightenYield = 0;
             Books->AddRow(FName(Source.Id), Row);
         }
@@ -178,7 +179,7 @@ namespace
         Rules.InsideCustomers = 4; // Legacy field name: night-time FRONT-shop count, not inside-store visitors.
         Rules.DaysPerWeek = 7;
         Rules.StartPsychic = 0;
-        Rules.PsychicMax = 100;
+        Rules.PsychicMax = 0; // Legacy serialized field, no longer used as a cap.
         Rules.StartPollution = 0;
         Rules.PollutionLimit = 100;
         Rules.PollutionDecay = 3;
@@ -306,31 +307,7 @@ namespace
 
     void BuildEndings(UDataTable* Endings)
     {
-        // Conditions: 数值调参表.xlsx, 结局判定!A4:D7.
-        // Short descriptions summarize 剧情设定与分幕剧本V7.0, chapter 10; these are not new endings.
-        auto Add = [Endings](const TCHAR* Id, EShopEnding Ending, EShopEndingCondition Condition, int32 Priority, const TCHAR* Title, const TCHAR* Text)
-        {
-            FEndingData Row;
-            Row.Ending = Ending;
-            Row.Condition = Condition;
-            Row.Priority = Priority;
-            Row.NegativeDaysRequired = 3;
-            Row.PollutionThreshold = 100;
-            Row.MinEnlighten = 60;
-            Row.MaxPollutionExclusive = 60;
-            Row.bRequireMoney = false;
-            Row.Title = FText::FromString(Title);
-            Row.Text = FText::FromString(Text);
-            Endings->AddRow(FName(Id), Row);
-        };
-        Add(TEXT("Closed"), EShopEnding::Closed, EShopEndingCondition::NegativeBalance, 1, TEXT("书店关门"),
-            TEXT("连续三天资不抵债，书店被清算。"));
-        Add(TEXT("PollutionReleased"), EShopEnding::PollutionReleased, EShopEndingCondition::PollutionLimit, 2, TEXT("污染释放"),
-            TEXT("污染达到极限，封印失控。"));
-        Add(TEXT("Returned"), EShopEnding::Returned, EShopEndingCondition::FinalThresholds, 3, TEXT("归还"),
-            TEXT("你将命名与解释、记录与真相，以及日常共识交还民众。每个人都成为守护封印的一员。"));
-        Add(TEXT("Cycle"), EShopEnding::Cycle, EShopEndingCondition::FinalFallback, 4, TEXT("守旧循环"),
-            TEXT("封印得以维持，改变尚未到来。书店与城市继续旧日的循环。"));
+        if (!ShopEndingAuthoring::Populate(Endings)) UE_LOG(LogShopReleaseData,Error,TEXT("Cannot load the five documented endings from SourceData/Endings/ending_rows.json"));
     }
 
     void BuildRelease(FTables& Tables)

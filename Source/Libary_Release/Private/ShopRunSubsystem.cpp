@@ -29,7 +29,7 @@ namespace
     }
     bool TradingPhase(EGamePhase Phase) { return Phase == EGamePhase::Day || Phase == EGamePhase::NightShop; }
     bool SellingPhase(EGamePhase Phase) { return Phase == EGamePhase::Sell || Phase == EGamePhase::NightSell; }
-    bool ModalPhase(EGamePhase Phase) { return Phase == EGamePhase::Calm || Phase == EGamePhase::History; }
+    bool ModalPhase(EGamePhase Phase) { return Phase == EGamePhase::Calm || Phase == EGamePhase::History || Phase == EGamePhase::EndingChoice; }
     FText EndingText(EShopEnding Ending)
     {
         switch (Ending)
@@ -38,6 +38,8 @@ namespace
         case EShopEnding::PollutionReleased: return FText::FromString(TEXT("污染释放：污染已突破极限。"));
         case EShopEnding::Returned: return FText::FromString(TEXT("归还：你获得了足够的启蒙，并控制住污染。"));
         case EShopEnding::Cycle: return FText::FromString(TEXT("守旧循环：期限结束，循环仍在继续。"));
+        case EShopEnding::FailedRedemption: return FText::FromString(TEXT("空书架：期限已到，赎身金不足。"));
+        case EShopEnding::Redeemed: return FText::FromString(TEXT("赎身离场：你赎回自由，独自离开城市。"));
         default: return FText();
         }
     }
@@ -163,13 +165,21 @@ FRunSnapshot UShopRunSubsystem::GetSnapshot_Implementation() const
     Out.Pollution = State.Pollution; Out.Enlighten = State.Enlighten; Out.PollutionStage = ShopDecrees::GetStage(State.Pollution, Catalog.Rules);
     Out.TotalStock = ShopEconomy::TotalStock(State); Out.TodayIncome = State.TodayIncome; Out.TodayExpense = State.TodayExpense;
     Out.TotalSold = State.TotalSold; Out.Rent = Catalog.Rules.Rent + State.RentPenalty; Out.Turn = State.Turn; Out.NegativeDays = State.NegativeDays;
-    Out.PsychicMax = Catalog.Rules.PsychicMax;
+    Out.PsychicMax = 0;
     Out.bCustomerPresent = IsCurrentCustomerPresent(); Out.CustomerArrivalRemaining = State.CustomerArrivalRemaining;
     Out.Phase = State.Phase; Out.NightChoice = State.NightChoice; Out.Ending = State.Ending;
+    Out.RedemptionPaid = State.RedemptionPaid;
     Out.ActiveDecrees = State.Decrees; Out.Clues = State.Clues; Out.DecreeCandidates = State.DecreeCandidates;
     Out.PendingEventId = State.PendingEventId; Out.EndMessage = EndingText(State.Ending);
+    Out.CollectedHistoryPages = State.CollectedHistoryPages; Out.DecreeBacklashLog = State.DecreeBacklashLog;
     FEndingData EndingData;
-    if (GetEndingInfo(State.Ending, EndingData)) Out.EndMessage = EndingData.Text;
+    if (GetEndingInfo(State.Ending, EndingData))
+    {
+        FFormatNamedArguments Args;
+        Args.Add(TEXT("Money"), FText::AsNumber(State.Money + State.RedemptionPaid, &FNumberFormattingOptions::DefaultNoGrouping()));
+        Args.Add(TEXT("Days"), FText::AsNumber(Catalog.Rules.MaxDays, &FNumberFormattingOptions::DefaultNoGrouping()));
+        Out.EndMessage = FText::Format(EndingData.Text, Args);
+    }
     return Out;
 }
 
@@ -186,6 +196,29 @@ bool UShopRunSubsystem::GetBookInfo_Implementation(FName BookId, FBookData& Book
 TArray<FName> UShopRunSubsystem::GetBookIds() const
 {
     TArray<FName> Ids; Catalog.Books.GetKeys(Ids); Ids.Sort(FNameLexicalLess()); return Ids;
+}
+TArray<FName> UShopRunSubsystem::GetDecreeIds() const
+{
+    TArray<FName> Ids; Catalog.Decrees.GetKeys(Ids); Ids.Sort(FNameLexicalLess()); return Ids;
+}
+bool UShopRunSubsystem::CanReadSecret(FName BookId, FText& Reason) const
+{
+    if (!bConfigured || State.Phase != EGamePhase::Inside)
+    { Reason = FText::FromString(TEXT("请在里书店翻阅。")); return false; }
+    FShopRunState Trial = State;
+    return ShopEconomy::Read(Trial, Catalog, BookId, Reason);
+}
+bool UShopRunSubsystem::CanOpenMarket() const
+{
+    if (!bConfigured) return false;
+    FShopRunState Trial = State; FText Reason;
+    return ShopStory::OpenMarket(Trial, Catalog, Reason);
+}
+bool UShopRunSubsystem::CanBuyMarketItem(FName Id, FText& Reason) const
+{
+    if (!bConfigured) return false;
+    FShopRunState Trial = State;
+    return ShopStory::BuyMarketItem(Trial, Catalog, Id, Reason);
 }
 bool UShopRunSubsystem::GetBookRuntime(FName BookId, FBookRuntime& Book) const
 {
@@ -337,7 +370,7 @@ bool UShopRunSubsystem::RequestContinue_Implementation()
     if (State.Phase == EGamePhase::Restock || State.Phase == EGamePhase::Inside || State.Phase == EGamePhase::NightShop) return RequestEndNight_Implementation().bSucceeded;
     if (State.Phase == EGamePhase::NightEnd)
     {
-        if (Catalog.Rules.bEnableMarket && State.Day % Catalog.Rules.DaysPerWeek == 0 && State.LastMarketDay != State.Day)
+        if (Catalog.Rules.bEnableMarket && !Catalog.Rules.bSecretBookMarket && State.Day % Catalog.Rules.DaysPerWeek == 0 && State.LastMarketDay != State.Day)
             return RequestOpenMarket_Implementation().bSucceeded;
         return RequestNextDay_Implementation();
     }
@@ -438,7 +471,20 @@ FShopCommandResult UShopRunSubsystem::RequestReadSecret_Implementation(FName Boo
     FShopRunState Next = State; FText Error;
     if (!ShopEconomy::Read(Next, Catalog, BookId, Error)) return Result(false, EShopActionResult::Rejected, Error, BookId);
     QueueEvents(Next, EShopEventTrigger::OnRead, BookId);
-    Commit(MoveTemp(Next), EShopActionResult::Success, BookId); return LastResult;
+    const int32 PsychicGain = Next.Psychic - State.Psychic;
+    const bool FoundPage = Next.CollectedHistoryPages.Num() > State.CollectedHistoryPages.Num();
+    if (FoundPage)
+    {
+        FShopEffect Reward; Reward.Type = EShopEffectType::Enlighten; Reward.Amount = Catalog.Rules.HistoryFragmentEnlightenGain;
+        if (!ShopEffects::Apply(Next, Catalog, {Reward}, BookId, -1, false, Error))
+            return Result(false, EShopActionResult::Rejected, Error, BookId);
+    }
+    const int32 EnlightenGain = Next.Enlighten - State.Enlighten;
+    Commit(MoveTemp(Next), EShopActionResult::Success, BookId);
+    if (LastResult.bSucceeded && Catalog.Rules.bUseHistoryFragments)
+        LastResult.Message = FText::FromString(FString::Printf(TEXT("灵能 +%d；启蒙 +%d；%s"), PsychicGain, EnlightenGain,
+            FoundPage ? TEXT("获得历史残页。") : TEXT("未获得新残页。")));
+    return LastResult;
 }
 
 FShopCommandResult UShopRunSubsystem::RequestPurify_Implementation(int32 Amount)
@@ -450,6 +496,17 @@ FShopCommandResult UShopRunSubsystem::RequestPurify_Implementation(int32 Amount)
     if (Amount > State.Psychic) return Reject(EShopActionResult::InsufficientPsychic, TEXT("灵能不足。"));
     FShopRunState Next = State; Next.Psychic -= Amount; Next.Pollution -= Amount;
     Next.Phase = Next.ResumePhase; Next.bPendingCalm = false;
+    Commit(MoveTemp(Next)); return LastResult;
+}
+
+FShopCommandResult UShopRunSubsystem::RequestOpenDecrees_Implementation()
+{
+    if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (State.Phase != EGamePhase::Day && State.Phase != EGamePhase::Sell && State.Phase != EGamePhase::Inside)
+        return Reject(EShopActionResult::InvalidPhase, TEXT("请在表书店或里书店打开律令。"));
+    FShopRunState Next = State;
+    Next.ResumePhase = Next.Phase; Next.Phase = EGamePhase::Calm; Next.bPendingCalm = false;
+    ShopDecrees::DrawCandidates(Next, Catalog);
     Commit(MoveTemp(Next)); return LastResult;
 }
 
@@ -525,6 +582,13 @@ FShopCommandResult UShopRunSubsystem::RequestCloseMarket_Implementation()
 {
     if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
     if (State.Phase != EGamePhase::Market) return Reject(EShopActionResult::InvalidPhase, TEXT("当前不在黑市。"));
+    if (Catalog.Rules.bSecretBookMarket)
+    {
+        FShopRunState Next = State; FText Error;
+        Next.LastMarketDay = Next.Day;
+        if (!SettleNight(Next, Error)) return Result(false, EShopActionResult::Rejected, Error);
+        Commit(MoveTemp(Next)); return LastResult;
+    }
     FShopRunState Next = State; Next.LastMarketDay = Next.Day; Next.Phase = EGamePhase::NightEnd;
     // Leaving the final market resolves the terminal ending without creating Day 36.
     if (Next.Day >= Catalog.Rules.MaxDays) CheckEnding(Next, true);
@@ -602,7 +666,7 @@ bool UShopRunSubsystem::RequestNextDay_Implementation()
 {
     if (!ReadyForCommand()) return false;
     if (State.Phase != EGamePhase::NightEnd || State.LastSettledDay != State.Day ||
-        (Catalog.Rules.bEnableMarket && State.Day % Catalog.Rules.DaysPerWeek == 0 && State.LastMarketDay != State.Day))
+        (Catalog.Rules.bEnableMarket && !Catalog.Rules.bSecretBookMarket && State.Day % Catalog.Rules.DaysPerWeek == 0 && State.LastMarketDay != State.Day))
     { Reject(EShopActionResult::InvalidPhase, TEXT("请先完成夜间结算和当晚黑市。")); return false; }
     FShopRunState Next = State;
     if (Next.Day >= Catalog.Rules.MaxDays) CheckEnding(Next, true);
@@ -614,10 +678,81 @@ bool UShopRunSubsystem::RequestNextDay_Implementation()
     Commit(MoveTemp(Next)); return LastResult.bSucceeded;
 }
 
+void UShopRunSubsystem::FinishEnding(FShopRunState& Next, const FEndingData& Ending) const
+{
+    // Called only after affordability was checked, once per run. Retain the paid amount for the final record.
+    Next.Money -= Ending.RedemptionCost;
+    Next.RedemptionPaid = Ending.RedemptionCost;
+    Next.Ending = Ending.Ending;
+    Next.Phase = EGamePhase::End;
+    Next.bPendingCalm = false;
+    Next.PendingEvents.Reset(); Next.PendingEventId = NAME_None; Next.ActiveCustomer = INDEX_NONE;
+    Next.bCustomerPresent = false; Next.CustomerArrivalRemaining = 0.f;
+}
+
+FShopCommandResult UShopRunSubsystem::RequestChooseEnding_Implementation(EShopFinalChoice Choice)
+{
+    if (!ReadyForCommand()) return Result(false, EShopActionResult::Rejected, GetLastError());
+    if (State.Phase != EGamePhase::EndingChoice || State.Ending != EShopEnding::None)
+        return Reject(EShopActionResult::InvalidPhase, TEXT("当前没有待确认的最终选择。"));
+    if (Choice != EShopFinalChoice::ReturnTruth && Choice != EShopFinalChoice::LeaveCity)
+        return Reject(EShopActionResult::InvalidId, TEXT("无效的最终选择。"));
+    FEndingData Ending;
+    if (!GetEndingInfo(Choice == EShopFinalChoice::ReturnTruth ? EShopEnding::Returned : EShopEnding::Redeemed, Ending))
+        return Reject(EShopActionResult::InvalidConfig, TEXT("缺少最终选择对应的结局配置。"));
+    if (State.Money < FMath::Max(Ending.MinMoney, Ending.RedemptionCost) ||
+        (Choice == EShopFinalChoice::ReturnTruth && (State.Enlighten < Ending.MinEnlighten || State.Pollution >= Ending.MaxPollutionExclusive)))
+        return Reject(EShopActionResult::Unavailable, TEXT("尚未满足此结局的条件。"));
+    FShopRunState Next = State;
+    FinishEnding(Next, Ending);
+    Commit(MoveTemp(Next));
+    return LastResult;
+}
+
+bool UShopRunSubsystem::PrepareEndingTest(EShopEndingTest Preset)
+{
+#if WITH_EDITOR
+    if (bCommitting || !bConfigured || !StaticEnum<EShopEndingTest>()->IsValidEnumValue(static_cast<int64>(Preset))) return false;
+    // A fresh run also resets presentation/audio after a previous ending or the main menu.
+    if ((State.Phase == EGamePhase::Boot || State.Phase == EGamePhase::End) && !RequestNewRun_Implementation()) return false;
+    // Fresh transient fixture. It never changes tables or ordinary gameplay rewards.
+    FShopRunState Next;
+    ShopEconomy::Reset(Next, Catalog);
+    Next.Random.Initialize(ConfiguredSeed < 0 ? 731 : ConfiguredSeed);
+    Next.Day = Catalog.Rules.MaxDays; Next.LastSettledDay = Next.Day;
+    Next.Phase = EGamePhase::NightEnd; Next.ResumePhase = EGamePhase::NightEnd;
+    Next.Money = 1500; Next.Enlighten = 60; Next.Pollution = 59;
+    switch (Preset)
+    {
+    case EShopEndingTest::EmptyShelf: Next.Money = 1499; break;
+    case EShopEndingTest::Pollution: Next.Pollution = Catalog.Rules.PollutionLimit; Next.bPollutionLimitReached = true; break;
+    case EShopEndingTest::Closed: Next.Money = -1; Next.NegativeDays = 3; break;
+    case EShopEndingTest::Redeemed: Next.Enlighten = 59; break;
+    default: break;
+    }
+    CheckEnding(Next, true);
+    Commit(MoveTemp(Next), EShopActionResult::Success, NAME_None, INDEX_NONE, true);
+    return LastResult.bSucceeded;
+#else
+    return false;
+#endif
+}
+
 void UShopRunSubsystem::CheckEnding(FShopRunState& Next, bool bFinal) const
 {
     const FRunRules& R = Catalog.Rules;
-    if (Next.Ending != EShopEnding::None) return;
+    if (Next.Ending != EShopEnding::None)
+    { Next.bPendingCalm = false; return; }
+    // Pollution is terminal on ANY day and outranks insolvency, history/decree modals and final choices.
+    if (Next.bPollutionLimitReached || Next.Pollution >= R.PollutionLimit)
+    {
+        FEndingData Ending;
+        if (!GetEndingInfo(EShopEnding::PollutionReleased, Ending)) Ending.Ending = EShopEnding::PollutionReleased;
+        FinishEnding(Next, Ending);
+        return;
+    }
+    if (Next.Phase == EGamePhase::EndingChoice && !bFinal)
+    { Next.bPendingCalm = false; return; }
     if (!Catalog.Endings.IsEmpty())
     {
         TArray<FEndingData> Rows; Catalog.Endings.GenerateValueArray(Rows);
@@ -634,8 +769,18 @@ void UShopRunSubsystem::CheckEnding(FShopRunState& Next, bool bFinal) const
             case EShopEndingCondition::FinalThresholds:
                 bMatch = bFinal && Next.Enlighten >= Row.MinEnlighten && Next.Pollution < Row.MaxPollutionExclusive && (!Row.bRequireMoney || Next.Money >= Row.MinMoney); break;
             case EShopEndingCondition::FinalFallback: bMatch = bFinal; break;
+            case EShopEndingCondition::FinalMoneyBelow: bMatch = bFinal && Next.Money < Row.MinMoney; break;
+            case EShopEndingCondition::FinalMoneyAtLeast: bMatch = bFinal && Next.Money >= Row.MinMoney; break;
             }
-            if (bMatch) { Next.Ending = Row.Ending; break; }
+            if (!bMatch || (Next.Money < Row.RedemptionCost && Row.RedemptionCost > 0)) continue;
+            if (Row.bRequiresPlayerChoice)
+            {
+                Next.Phase = EGamePhase::EndingChoice; Next.ResumePhase = EGamePhase::NightEnd;
+                Next.bPendingCalm = false; Next.PendingEvents.Reset(); Next.PendingEventId = NAME_None;
+                Next.ActiveCustomer = INDEX_NONE; Next.bCustomerPresent = false; Next.CustomerArrivalRemaining = 0.f;
+                return;
+            }
+            FinishEnding(Next, Row); break;
         }
     }
     else
@@ -654,6 +799,12 @@ void UShopRunSubsystem::CheckEnding(FShopRunState& Next, bool bFinal) const
 void UShopRunSubsystem::DispatchModal(FShopRunState& Next)
 {
     if (Next.Phase == EGamePhase::End || ModalPhase(Next.Phase)) return;
+    if (Catalog.Rules.bUseHistoryFragments && !Next.PendingEvents.IsEmpty())
+    {
+        // Reading pays rewards once, then shows the found page before any queued pollution alert.
+        Next.ResumePhase = Next.Phase; Next.Phase = EGamePhase::History;
+        Next.PendingEventId = Next.PendingEvents[0]; Next.PendingEvents.RemoveAt(0); return;
+    }
     if (Next.bPendingCalm)
     { Next.ResumePhase = Next.Phase; Next.Phase = EGamePhase::Calm; Next.bPendingCalm = false; ShopDecrees::DrawCandidates(Next, Catalog); }
     else if (Catalog.Rules.bEnableHistory && !Next.PendingEvents.IsEmpty())
@@ -691,6 +842,27 @@ void UShopRunSubsystem::Commit(FShopRunState&& Next, EShopActionResult Code, FNa
     { Next.HeavyDueTurn = Next.Turn + Catalog.Rules.HeavyGraceTurns; Next.bGoldDuringHeavyGrace = false; }
     if (NewStage != EPollutionStage::Heavy) { Next.HeavyDueTurn = INDEX_NONE; Next.bGoldDuringHeavyGrace = false; }
     Next.PeakPollutionThisCommand = 0;
+    for (const FDecreeRuntime& Runtime : Next.Decrees)
+    {
+        const FDecreeRuntime* Previous = State.Decrees.FindByPredicate([&](const FDecreeRuntime& Entry) { return Entry.Id == Runtime.Id; });
+        if (!Runtime.bLoopholeTriggered || (Previous && Previous->bLoopholeTriggered && Previous->EnactedTurn == Runtime.EnactedTurn)) continue;
+        const FDecreeData* Data = Catalog.Decrees.Find(Runtime.Id);
+        if (Data)
+        {
+            FString Detail = Data->LoopholeText.ToString();
+            if (Data->LoopholeEffect.ContainsByPredicate([](const FShopEffect& Effect) { return Effect.Type == EShopEffectType::PermanentBusinessPenalty; }))
+            {
+                if (Next.CustomerPenalty > State.CustomerPenalty)
+                    Detail = FString::Printf(TEXT("本次永久减少 %d 位顾客；基础每日顾客变为 %d 人（最低 1 人）。"), Next.CustomerPenalty-State.CustomerPenalty, FMath::Max(1,3-Next.CustomerPenalty));
+                else if (Next.RentPenalty > State.RentPenalty)
+                    Detail = FString::Printf(TEXT("本次永久增加租金 %d；当前租金 %d。"), Next.RentPenalty-State.RentPenalty, Catalog.Rules.Rent+Next.RentPenalty);
+                else Detail = TEXT("永久代价已达到配置上限，本次未继续增加。");
+            }
+            Next.DecreeBacklashLog.Add(FText::FromString(FString::Printf(TEXT("第 %d 天 · 回合 %d · %s反噬：%s"),
+                Next.Day, Next.Turn, *Data->DisplayName.ToString(), *Detail)));
+        }
+    }
+    if (Next.DecreeBacklashLog.Num() > 30) Next.DecreeBacklashLog.RemoveAt(0, Next.DecreeBacklashLog.Num() - 30);
     CheckEnding(Next);
     InjectPendingFakeCustomers(Next);
     if (Catalog.Rules.bDaytimeOnlyLoop && Next.Phase == EGamePhase::Day && ShopCustomers::AllServed(Next))

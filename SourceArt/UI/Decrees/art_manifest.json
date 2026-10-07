@@ -1,0 +1,136 @@
+{
+  "source_archives": [
+    {
+      "file": "D:\\qqdownloads\\律令卡牌\\律令卡牌立绘.zip",
+      "sha256": "82a0d987de3829e7fa7dc7b4b277beb17a62eb59ac1e799d98b04a542f2edd26"
+    },
+    {
+      "file": "D:\\qqdownloads\\律令系统右侧栏.zip",
+      "sha256": "6a80da097efc6de6a8fbf9338ce75eac9ca3c8fb15b69911e8fc145641dfd546"
+    }
+  ],
+  "decrees": [
+    {
+      "id": "gold_01",
+      "source": "Cards/金-无名律.png",
+      "texture": "/Game/ProgramA/UI/Art/Decrees/T_Decree_gold_01"
+    },
+    {
+      "id": "gold_02",
+      "source": "Cards/金-潮汐率.png",
+      "texture": "/Game/ProgramA/UI/Art/Decrees/T_Decree_gold_02"
+    },
+    {
+      "id": "silver_01",
+      "source": "Cards/银-闭架律.png",
+      "texture": "/Game/ProgramA/UI/Art/Decrees/T_Decree_silver_01"
+    },
+    {
+      "id": "silver_02",
+      "source": "Cards/银-守夜律.png",
+      "texture": "/Game/ProgramA/UI/Art/Decrees/T_Decree_silver_02"
+    },
+    {
+      "id": "bronze_01",
+      "source": "Cards/铜-静阅律.png",
+      "texture": "/Game/ProgramA/UI/Art/Decrees/T_Decree_bronze_01"
+    },
+    {
+      "id": "bronze_02",
+      "source": "Cards/铜-闭门律.png",
+      "texture": "/Game/ProgramA/UI/Art/Decrees/T_Decree_bronze_02"
+    },
+    {
+      "id": "bronze_03",
+      "source": "Cards/铜-燃烛律.png",
+      "texture": "/Game/ProgramA/UI/Art/Decrees/T_Decree_bronze_03"
+    }
+  ],
+  "files": [
+    {
+      "file": "Cards/金-无名律.png",
+      "sha256": "007356af9e0041c0b3c2c8f406c9d231fb2654577810a90b9da22ab4044a75fc"
+    },
+    {
+      "file": "Cards/金-潮汐率.png",
+      "sha256": "74c11a57a822d10ffe30895b3e0daa0f20cfa1923322052b7dcb7d49d6acb192"
+    },
+    {
+      "file": "Cards/金.png",
+      "sha256": "3deb99af2480ba5ec6d9ea36f4f26eb8434a94eb443e7d27e15b05020bd440cf"
+    },
+    {
+      "file": "Cards/铜-燃烛律.png",
+      "sha256": "65a3cae7281dda2c3075150554e4ce4c55dee028659268ccfd7b7f5296260fc5"
+    },
+    {
+      "file": "Cards/铜-闭门律.png",
+      "sha256": "525e8ae7a1e50e7d335d2fa675b786cf5cd34590b8ef372d47fe4eb227a3509d"
+    },
+    {
+      "file": "Cards/铜-静阅律.png",
+      "sha256": "abe30a2aa7651034bf0da0372d868217f35e903e22cb98ec777c01e03cb39b9c"
+    },
+    {
+      "file": "Cards/铜.png",
+      "sha256": "ce9227db9ad148c73e3bfb946b5019b58ada5866d93d9a2dc800c12bdc1a09e6"
+    },
+    {
+      "file": "Cards/银-守夜律.png",
+      "sha256": "72e9964eae2819a05453f4ddc0fa903179c1a8c303c8950b6832df2145420a73"
+    },
+    {
+      "file": "Cards/银-闭架律.png",
+      "sha256": "3ea0a3dd84fc1a66fa00363d4c9a30dc4f54cefab9529cd94c2f2c87a47765df"
+    },
+    {
+      "file": "Cards/银.png",
+      "sha256": "dac3b9adf5a05d857e1cb8a2a820b768eb272b830d20f459d12ad16d5a8f275d"
+    },
+    {
+      "file": "Interface/右侧栏.png",
+      "sha256": "1491cf1517ca3bcdbd406074f5428ec6c3f1ede210aa0a9c55028236249bd6ef"
+    },
+    {
+      "file": "Interface/右侧栏底框.png",
+      "sha256": "2b30bd1f2f600e56e369b875e8844ae39dd683c9d37169f67c2db037419b5a1d"
+    },
+    {
+      "file": "Interface/未选择律令.png",
+      "sha256": "3a8906f8847f8fa1a13de7683811e8339ce58e2f59208ec7b527d1779d3babfb"
+    },
+    {
+      "file": "Interface/画板 1.png",
+      "sha256": "cbbf6b3ac756a00313eda1b5438036f9aa11c0910480d5430f7f4305e30f8afc"
+    },
+    {
+      "file": "Interface/矩形 25.png",
+      "sha256": "f1e7cf3b4ea97d9bfe5efe59aaac027cb679c0b043397370415220dd6b51ec71"
+    },
+    {
+      "file": "Interface/确定-未选中.png",
+      "sha256": "eb154b910a9605bb2582a241ea2ed1f22263b773a05f2b9b918f4e7af058b53d"
+    },
+    {
+      "file": "Interface/确定-点击.png",
+      "sha256": "728eef280ae63af4a814a6ae204136b85c42d810af952bed20d8d88f97762779"
+    },
+    {
+      "file": "Interface/确定-选中.png",
+      "sha256": "f43b2c2fe470a5ea4724177448827459d5bf8482d8755a7178138867fef199fc"
+    },
+    {
+      "file": "Interface/返回.png",
+      "sha256": "47c7534056c58b494ac73ded71748aa9da2117bb0bedf5555b35c48b6e9f04d4"
+    },
+    {
+      "file": "Interface/选中预览.png",
+      "sha256": "b0f0ed3b25f57ec1df286fc7f3952b587db82ee402d07c0c413bf72708617ae2"
+    }
+  ],
+  "notes": [
+    "The filename 金-潮汐率.png maps to the existing gold_02 潮汐律. Source bytes and business ID/name are preserved.",
+    "画板 1.png and 选中预览.png are layout references, not flattened runtime interfaces. Live WBP widgets use the individual original components.",
+    "Emergency calming has no dedicated supplied card. Its preview uses the bronze tier back, clearly titled 应急镇定."
+  ]
+}

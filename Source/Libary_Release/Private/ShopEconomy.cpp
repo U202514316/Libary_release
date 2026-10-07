@@ -217,22 +217,24 @@ bool ShopEconomy::Read(FShopRunState& State, const FShopCatalog& Catalog, FName 
     if (!IsInsideBook(*Book) || !IsSecretInventoryValid(*Runtime))
         return EconomyFail(Error, LOCTEXT("CannotRead", "只有有效的里世界密文书可以阅读。"));
     if (Runtime->Stock <= 0) return EconomyFail(Error, LOCTEXT("NoOwnedBook", "库存中没有这本书。"));
-    if (!Catalog.Rules.bAllowRepeatRead && Runtime->ReadCopies >= Runtime->Stock)
+    if (Catalog.Rules.bUseHistoryFragments && Runtime->LastReadDay == State.Day)
+        return EconomyFail(Error, LOCTEXT("ReadTonight", "这本书今晚已翻阅，下一晚可再次翻阅。"));
+    if (!Catalog.Rules.bUseHistoryFragments && !Catalog.Rules.bAllowRepeatRead && Runtime->ReadCopies >= Runtime->Stock)
         return EconomyFail(Error, LOCTEXT("AlreadyRead", "已读完库存中的每一本书。"));
     FShopRunState Next = State;
     FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
     int32 CopyIndex = NextBook.SecretCopies.IndexOfByPredicate([](const FSecretBookCopy& Copy) { return !Copy.bRead; });
-    if (CopyIndex == INDEX_NONE && Catalog.Rules.bAllowRepeatRead && !NextBook.SecretCopies.IsEmpty()) CopyIndex = 0;
+    if (CopyIndex == INDEX_NONE && (Catalog.Rules.bAllowRepeatRead || Catalog.Rules.bUseHistoryFragments) && !NextBook.SecretCopies.IsEmpty()) CopyIndex = 0;
     if (CopyIndex == INDEX_NONE) return EconomyFail(Error, LOCTEXT("AlreadyRead", "已读完库存中的每一本书。"));
     FSecretBookCopy& Copy = NextBook.SecretCopies[CopyIndex];
     int32 PsychicGain;
-    const int32 BaseGain = Book->PsychicYield == -1 ? Catalog.Rules.ReadPsychicGain : Book->PsychicYield;
+    const int32 BaseGain = Catalog.Rules.bUseHistoryFragments || Book->PsychicYield == -1 ? Catalog.Rules.ReadPsychicGain : Book->PsychicYield;
     if (!ScaledGain(State, EShopEffectType::PsychicGainMultiplier, BaseGain, PsychicGain, Error)) return false;
-    const int64 NewPsychic = FMath::Min<int64>(Catalog.Rules.PsychicMax, static_cast<int64>(State.Psychic) + PsychicGain);
-    const int64 NewEnlighten = static_cast<int64>(State.Enlighten) + Book->EnlightenYield;
-    if (Catalog.Rules.PsychicMax <= 0 || State.Psychic < 0 || State.Enlighten < 0 || Book->EnlightenYield < 0 || !FitsInteger(NewPsychic) || !FitsInteger(NewEnlighten))
+    const int64 NewPsychic = static_cast<int64>(State.Psychic) + PsychicGain;
+    const int64 NewEnlighten = static_cast<int64>(State.Enlighten) + (Catalog.Rules.bUseHistoryFragments ? 0 : Book->EnlightenYield);
+    if (State.Psychic < 0 || State.Enlighten < 0 || Book->EnlightenYield < 0 || !FitsInteger(NewPsychic) || !FitsInteger(NewEnlighten))
         return EconomyFail(Error, LOCTEXT("ReadOverflow", "阅读收益配置无效或超出整数范围。"));
-    const int32 BasePollution = BookPollution(*Book, Catalog.Rules.PollutionOnRead);
+    const int32 BasePollution = Catalog.Rules.bUseHistoryFragments ? Catalog.Rules.PollutionOnRead : BookPollution(*Book, Catalog.Rules.PollutionOnRead);
     if (BasePollution < 0 || Catalog.Rules.AlteredBookReadPollution < 0 || Catalog.Rules.ReturnedBookReadPollution < 0)
         return EconomyFail(Error, LOCTEXT("InvalidReadPollution", "阅读污染配置无效。"));
     const int64 Pollution = static_cast<int64>(BasePollution) +
@@ -244,6 +246,7 @@ bool ShopEconomy::Read(FShopRunState& State, const FShopCatalog& Catalog, FName 
     Next.Psychic = static_cast<int32>(NewPsychic);
     Next.Enlighten = static_cast<int32>(NewEnlighten);
     Copy.bRead = true;
+    NextBook.LastReadDay = State.Day;
     RefreshBookCounts(NextBook);
     if (!Book->CluePool.IsEmpty() && Catalog.Rules.ClueDropChance > 0.f && Next.Random.FRand() < Catalog.Rules.ClueDropChance)
     {
@@ -252,6 +255,24 @@ bool ShopEconomy::Read(FShopRunState& State, const FShopCatalog& Catalog, FName 
         Clues.Sort(FNameLexicalLess());
         if (!Clues.IsEmpty()) Next.Clues.AddUnique(Clues[Next.Random.RandRange(0, Clues.Num() - 1)]);
     }
+    State = MoveTemp(Next);
+    return true;
+}
+
+bool ShopEconomy::BuySecret(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, int32 Price, FText& Error)
+{
+    Error = FText::GetEmpty();
+    const FBookData* Data = Catalog.Books.Find(BookId);
+    const FBookRuntime* Book = State.Inventory.Find(BookId);
+    if (!Data || !Book || !IsInsideBook(*Data) || !IsSecretInventoryValid(*Book) || Price < 0 || Catalog.Rules.MarketBookPollution < 0)
+        return EconomyFail(Error, LOCTEXT("BadMarketBook", "黑市书籍、价格或污染配置无效。"));
+    if (!CanAddStock(State)) return EconomyFail(Error, LOCTEXT("StockOverflow", "库存超出整数范围。"));
+    FShopRunState Next = State;
+    if (!AddMoney(Next, -Price, Error, true) || !AddPollution(Next, Catalog, Catalog.Rules.MarketBookPollution, Error)) return false;
+    FBookRuntime& NextBook = Next.Inventory.FindChecked(BookId);
+    FSecretBookCopy Copy; Copy.bSealed = true;
+    NextBook.SecretCopies.Add(Copy); // Stored, unread and unlisted; owned cap limits free supply only.
+    RefreshBookCounts(NextBook);
     State = MoveTemp(Next);
     return true;
 }
@@ -415,10 +436,12 @@ bool ShopEconomy::ApplyNightlySupply(FShopRunState& State, const FShopCatalog& C
     FShopRunState Next = State;
     if (Rules.NightlyPsychicGain > 0)
     {
-        if (Rules.PsychicMax < 0 || Next.Psychic < 0)
-            return EconomyFail(Error, LOCTEXT("InvalidNightlyPsychic", "灵能或灵能上限配置无效。"));
+        if (Next.Psychic < 0)
+            return EconomyFail(Error, LOCTEXT("InvalidNightlyPsychic", "当前灵能无效。"));
         const int64 Psychic = static_cast<int64>(Next.Psychic) + Rules.NightlyPsychicGain;
-        Next.Psychic = static_cast<int32>(FMath::Min<int64>(Psychic, Rules.PsychicMax));
+        if (!FitsInteger(Psychic))
+            return EconomyFail(Error, LOCTEXT("NightlyPsychicOverflow", "夜间灵能收益超出整数范围。"));
+        Next.Psychic = static_cast<int32>(Psychic);
     }
     if (Rules.NightlySecretSupply > 0 && Rules.SecretOwnedCap > 0)
     {

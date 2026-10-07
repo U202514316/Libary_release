@@ -16,6 +16,7 @@ namespace ShopEconomy
     LIBARY_RELEASE_API bool Restock(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, FText& Error);
     LIBARY_RELEASE_API bool Collect(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, FText& Error);
     LIBARY_RELEASE_API bool Read(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, FText& Error);
+    LIBARY_RELEASE_API bool BuySecret(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, int32 Price, FText& Error);
     // Moves one owned secret copy onto/off the surface sales shelf without changing ownership.
     LIBARY_RELEASE_API bool SetSecretListing(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, bool bListed, FText& Error);
     LIBARY_RELEASE_API EShopActionResult Sell(FShopRunState& State, const FShopCatalog& Catalog, FName BookId, const FCustomerRuntime& Customer, FText& Error);

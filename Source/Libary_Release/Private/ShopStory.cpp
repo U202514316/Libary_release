@@ -27,6 +27,23 @@ void ShopStory::QueueEvents(FShopRunState& State, const FShopCatalog& Catalog, E
     TArray<FName> Ids;
     Catalog.Events.GetKeys(Ids);
     Ids.Sort(FNameLexicalLess());
+    if (Catalog.Rules.bUseHistoryFragments)
+    {
+        if (Trigger != EShopEventTrigger::OnRead) return;
+        Ids.RemoveAll([&](FName Id)
+        {
+            const FEventData& Page = Catalog.Events.FindChecked(Id);
+            return !Page.bEnabled || State.CollectedHistoryPages.Contains(Id) || State.PendingEventId == Id || State.PendingEvents.Contains(Id);
+        });
+        // A single 30% roll per successful read, then one uniformly selected uncollected page.
+        // Never roll independently seven times, and never grant reading rewards again on closing.
+        if (!Ids.IsEmpty() && State.Random.FRand() < Catalog.Rules.HistoryFragmentChance)
+        {
+            const FName Id = Ids[State.Random.RandRange(0, Ids.Num() - 1)];
+            State.CollectedHistoryPages.Add(Id); State.PendingEvents.Add(Id);
+        }
+        return;
+    }
     for (FName Id : Ids)
     {
         const FEventData& Event = Catalog.Events.FindChecked(Id);
@@ -54,10 +71,10 @@ bool ShopStory::Witness(FShopRunState& State, const FShopCatalog& Catalog, EHist
     if (Catalog.Rules.PollutionOnHistory < 0) return Fail(Error, LOCTEXT("InvalidHistoryPollution", "历史事件的污染增量配置无效。"));
 
     FShopRunState Next = State;
-    if (!ShopEffects::Apply(Next, Catalog, Event->ResultA, Id, -1, false, Error)) return false;
+    if (!Catalog.Rules.bUseHistoryFragments && !ShopEffects::Apply(Next, Catalog, Event->ResultA, Id, -1, false, Error)) return false;
     FShopEffect Pollution;
     Pollution.Type = EShopEffectType::Pollution;
-    Pollution.Amount = Catalog.Rules.PollutionOnHistory;
+    Pollution.Amount = Catalog.Rules.bUseHistoryFragments ? 0 : Catalog.Rules.PollutionOnHistory;
     TArray<FShopEffect> HistoryEffects;
     HistoryEffects.Add(Pollution);
     if (!ShopEffects::Apply(Next, Catalog, HistoryEffects, Id, -1, false, Error)) return false;
@@ -74,8 +91,13 @@ bool ShopStory::OpenMarket(FShopRunState& State, const FShopCatalog& Catalog, FT
     const FRunRules& Rules = Catalog.Rules;
     if (!Rules.bEnableMarket) return Fail(Error, LOCTEXT("MarketDisabled", "当前配置未开放午夜集市。"));
     if (Rules.DaysPerWeek <= 0) return Fail(Error, LOCTEXT("InvalidWeekLength", "每周天数配置无效。"));
-    if (State.Phase != EGamePhase::NightEnd || State.Day <= 0 || State.LastSettledDay != State.Day || State.Day % Rules.DaysPerWeek != 0)
-        return Fail(Error, LOCTEXT("MarketNotOpen", "午夜集市只在每周末的夜间结算完成后开放。"));
+    const bool bCorrectPhase = Rules.bSecretBookMarket
+        ? State.Phase == EGamePhase::DuskChoice && State.NightChoice == ENightChoice::None
+        : State.Phase == EGamePhase::NightEnd && State.LastSettledDay == State.Day;
+    if (!bCorrectPhase || State.Day <= 0 || State.Day % Rules.DaysPerWeek != 0)
+        return Fail(Error, Rules.bSecretBookMarket
+            ? LOCTEXT("SecretMarketNotOpen", "黑市只在每隔七天的夜晚选择阶段开放，本晚只能选择一项活动。")
+            : LOCTEXT("MarketNotOpen", "午夜集市只在每周末的夜间结算完成后开放。"));
     if (State.LastMarketDay == State.Day) return Fail(Error, LOCTEXT("MarketAlreadyClosed", "本晚的午夜集市已经结束。"));
     const int32 Week = 1 + (State.Day - 1) / Rules.DaysPerWeek;
     TArray<FName> Items;
@@ -90,6 +112,7 @@ bool ShopStory::OpenMarket(FShopRunState& State, const FShopCatalog& Catalog, FT
     State.MarketStock = MoveTemp(Items);
     State.MarketSold.Reset();
     State.Phase = EGamePhase::Market;
+    if (Rules.bSecretBookMarket) State.NightChoice = ENightChoice::Market;
     // LastMarketDay is written when the coordinator closes the market.
     return true;
 }
@@ -106,6 +129,13 @@ bool ShopStory::BuyMarketItem(FShopRunState& State, const FShopCatalog& Catalog,
     if (Item->Price < 0) return Fail(Error, LOCTEXT("InvalidMarketPrice", "集市商品价格配置无效。"));
 
     FShopRunState Next = State;
+    if (Catalog.Rules.bSecretBookMarket)
+    {
+        if (!ShopEconomy::BuySecret(Next, Catalog, Item->SecretBookId, Item->Price, Error)) return false;
+        Next.MarketSold.AddUnique(ItemId);
+        State = MoveTemp(Next);
+        return true;
+    }
     if (!ShopEconomy::AddMoney(Next, -Item->Price, Error, true)) return false;
     if (!ShopEffects::Apply(Next, Catalog, Item->TabooCost, ItemId, -1, true, Error)) return false;
     if (!ShopEffects::Apply(Next, Catalog, Item->Effect, ItemId, -1, false, Error)) return false;

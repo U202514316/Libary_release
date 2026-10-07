@@ -3,6 +3,12 @@
 
 #include "ShopGameMode.h"
 #include "ShopPlayerController.h"
+#include "ShopAudioComponent.h"
+#include "ShopAudioPalette.h"
+#include "ShopAudioLibrary.h"
+#include "Sound/SoundCue.h"
+#include "Sound/SoundNodeWavePlayer.h"
+#include "Sound/SoundWave.h"
 #include "ShopPresentationLibrary.h"
 #include "ShopRunSubsystem.h"
 #include "ShopView.h"
@@ -36,10 +42,13 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Misc/Parse.h"
 #include "Modules/ModuleManager.h"
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
 #include "WidgetBlueprint.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogShopUIVerify, Log, All);
 
@@ -50,7 +59,8 @@ namespace
         TEXT("Components/WBP_SaleBookCard"), TEXT("Components/WBP_MerchantBookCard"), TEXT("Components/WBP_SecretBookCard"),
         TEXT("WBP_MainMenu"), TEXT("WBP_OwlTutorial"), TEXT("WBP_SurfaceShop"), TEXT("WBP_Bookshelf"), TEXT("WBP_DaySettlement"),
         TEXT("WBP_NightChoice"), TEXT("WBP_Merchant"), TEXT("WBP_InsideShop"), TEXT("WBP_Decree"),
-        TEXT("WBP_NightSettlement"), TEXT("WBP_Ending"), TEXT("WBP_UIRoot")
+        TEXT("WBP_NightSettlement"), TEXT("WBP_Ending"), TEXT("WBP_UIRoot"),
+        TEXT("Components/WBP_BlackMarketBookCard"), TEXT("WBP_HistoryFragment"), TEXT("WBP_BlackMarket"), TEXT("WBP_DecreeIntroduction")
     };
 
     struct FReport
@@ -99,22 +109,23 @@ namespace
 
     bool VerifyAuthoredEndings(FReport& Report)
     {
-        UDataTable* Table = Load<UDataTable>(TEXT("/Game/ProgramA/Release/Data/DT_Endings"));
-        if (!Report.Check(Table && Table->GetRowStruct() == FEndingData::StaticStruct() && Table->GetRowMap().Num() == 4,
-            TEXT("Saved DT_Endings has exactly four authored FEndingData rows"))) return false;
-        const FEndingData* Closed = Table->FindRow<FEndingData>(TEXT("Closed"), TEXT("UIVerify"));
-        const FEndingData* Pollution = Table->FindRow<FEndingData>(TEXT("PollutionReleased"), TEXT("UIVerify"));
-        const FEndingData* Returned = Table->FindRow<FEndingData>(TEXT("Returned"), TEXT("UIVerify"));
-        const FEndingData* Cycle = Table->FindRow<FEndingData>(TEXT("Cycle"), TEXT("UIVerify"));
-        return Report.Check(Closed && Closed->Ending == EShopEnding::Closed && Closed->Condition == EShopEndingCondition::NegativeBalance &&
-                Closed->Priority == 1 && Closed->NegativeDaysRequired == 3 && !Closed->Title.IsEmpty() && !Closed->Text.IsEmpty(), TEXT("Saved Closed: priority1, three negative days, authored title/story")) &&
-            Report.Check(Pollution && Pollution->Ending == EShopEnding::PollutionReleased && Pollution->Condition == EShopEndingCondition::PollutionLimit &&
-                Pollution->Priority == 2 && Pollution->PollutionThreshold == 100 && !Pollution->Title.IsEmpty() && !Pollution->Text.IsEmpty(), TEXT("Saved PollutionReleased: priority2, pollution100, authored title/story")) &&
-            Report.Check(Returned && Returned->Ending == EShopEnding::Returned && Returned->Condition == EShopEndingCondition::FinalThresholds &&
-                Returned->Priority == 3 && Returned->MinEnlighten == 60 && Returned->MaxPollutionExclusive == 60 && !Returned->bRequireMoney &&
-                !Returned->Title.IsEmpty() && !Returned->Text.IsEmpty(), TEXT("Saved Returned: priority3, final enlightenment60 and pollution below60, no money requirement")) &&
-            Report.Check(Cycle && Cycle->Ending == EShopEnding::Cycle && Cycle->Condition == EShopEndingCondition::FinalFallback &&
-                Cycle->Priority == 4 && !Cycle->Title.IsEmpty() && !Cycle->Text.IsEmpty(), TEXT("Saved Cycle: priority4, final fallback, authored title/story"));
+        UDataTable* Table=Load<UDataTable>(TEXT("/Game/ProgramA/Release/Data/DT_Endings"));
+        FString Source;
+        TArray<TSharedPtr<FJsonValue>> Rows;
+        if(!Report.Check(Table&&Table->GetRowStruct()==FEndingData::StaticStruct()&&Table->GetRowMap().Num()==5,
+            TEXT("Saved ending table contains exactly the five manuscript endings")) ||
+            !Report.Check(FFileHelper::LoadFileToString(Source,*(FPaths::ProjectDir()/TEXT("SourceData/Endings/ending_rows.json")))&&
+                FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Source),Rows)&&Rows.Num()==5,TEXT("Read extracted manuscript rows")))return false;
+        for(const auto& Value:Rows)
+        {
+            const auto Object=Value->AsObject();
+            const FEndingData* Row=Table->FindRow<FEndingData>(FName(*Object->GetStringField(TEXT("Name"))),TEXT("FiveEndings"));
+            if(!Report.Check(Row && Row->Title.ToString()==Object->GetStringField(TEXT("Title")) && Row->Text.ToString()==Object->GetStringField(TEXT("Text")) &&
+                Row->Priority==Object->GetIntegerField(TEXT("Priority")) && Row->MinMoney==1500 &&
+                Row->RedemptionCost==Object->GetIntegerField(TEXT("RedemptionCost")) && Row->bRequiresPlayerChoice==Object->GetBoolField(TEXT("bRequiresPlayerChoice")),
+                TEXT("Saved title, complete story, priority and choice/cost match manuscript row: ")+Object->GetStringField(TEXT("Name"))))return false;
+        }
+        return true;
     }
 
     struct FSession
@@ -129,6 +140,7 @@ namespace
         FString PreviewPrefix;
         int32 PreviewIndex = 0;
         bool bCapturePreviews = true;
+        bool bCaptureSmallPreviews = false;
         bool bCaptureSceneStates = false;
         bool bCapturedSceneStates = false;
         bool bCapturedMerchantStates = false;
@@ -138,6 +150,11 @@ namespace
         explicit FSession(FReport& InReport) : Instance(nullptr), Root(nullptr), Report(InReport) {}
         ~FSession()
         {
+            if (Controller && Controller->ShopAudio)
+            {
+                Controller->ShopAudio->ShutdownAudio();
+                Report.Check(!Controller->ShopAudio->IsAudioInitialized() && Controller->ShopAudio->CurrentMusic.IsNone(), TEXT("Audio observer and loop state cleaned up with session"));
+            }
             if (Run && Root.IsValid()) Run->UnregisterView(Root.Get());
             if (Controller) Controller->RootWidget = nullptr;
             if (Root.IsValid()) Root->ReleaseSlateResources(true);
@@ -152,7 +169,7 @@ namespace
         }
 
         bool Start(UClass* ControllerClass, UClass* RootClass, bool bInsideBranch, bool bShortScenario = false,
-            int32 Seed = 731, bool bPollutionBoundary = false, bool bPollutedPortraitFixture = false)
+            int32 Seed = 731, bool bPollutionBoundary = false, bool bPollutedPortraitFixture = false, float HistoryChance = -1.f, int32 InitialPsychicFixture = -1)
         {
             PreviewPrefix = bPollutionBoundary ? TEXT("pollution_boundary") : bShortScenario ? TEXT("short_fixture") : bInsideBranch ? TEXT("inside") : TEXT("merchant");
             if (bPollutedPortraitFixture) PreviewPrefix = TEXT("polluted_fixture");
@@ -184,6 +201,20 @@ namespace
                 TEXT("Actual saved UI rules: 35 days, unique daily portraits, customer arrival enabled at 2..4 seconds"))) return false;
             Report.Note(FString::Printf(TEXT("SPECIAL CUSTOMERS saved rules: MediumThreshold=%d; PollutionOnPollutedCustomer=%d; PollutionOnSell=%d"),
                 SavedRules.MediumThreshold, SavedRules.PollutionOnPollutedCustomer, SavedRules.PollutionOnSell));
+            if (!Report.Check(SavedRules.PsychicMax == 0, TEXT("Saved rules no longer advertise a psychic cap"))) return false;
+            if (!Report.Check(SavedRules.HistoryFragmentEnlightenGain == 10, TEXT("Saved new-fragment reward is ten enlightenment"))) return false;
+            if (InitialPsychicFixture >= 0)
+            {
+                Rules = DuplicateObject<UDataTable>(Rules, GetTransientPackage()); FixtureTables.Emplace(Rules);
+                Rules->FindRow<FRunRules>(Rules->GetRowNames()[0], TEXT("PsychicLayoutFixture"))->StartPsychic = InitialPsychicFixture;
+                Report.Note(TEXT("TRANSIENT LARGE PSYCHIC FIXTURE ONLY: start psychic=1234567890; saved rules unchanged."));
+            }
+            if (HistoryChance >= 0.f)
+            {
+                Rules = DuplicateObject<UDataTable>(Rules, GetTransientPackage()); FixtureTables.Emplace(Rules);
+                Rules->FindRow<FRunRules>(Rules->GetRowNames()[0],TEXT("HistoryFixture"))->HistoryFragmentChance = HistoryChance;
+                Report.Note(FString::Printf(TEXT("TRANSIENT HISTORY PROBABILITY FIXTURE ONLY: chance=%.2f; all other saved rule values and seven authored texts retained."),HistoryChance));
+            }
             if (bShortScenario || bPollutionBoundary || bPollutedPortraitFixture)
             {
                 if (!Report.Check(Rules && Customers && Rules->GetRowNames().Num() == 1, TEXT("Short-fixture source tables exist"))) return false;
@@ -218,7 +249,7 @@ namespace
                     : TEXT("TRANSIENT POLLUTION BOUNDARY ONLY: saved MaxDays=35; StartPollution=0; PollutionOnSell=PollutionLimit; Secret weight=1e12. Saved endings, books and assets remain unchanged."));
             }
             if (!Report.Check(Run->ConfigureTables(Books, Customers, Rules, Decrees,
-                Load<UDataTable>(Release + TEXT("DT_Events")), Load<UDataTable>(Release + TEXT("DT_MarketItems")),
+                Load<UDataTable>(AssetRoot + TEXT("Data/DT_Events_UI")), Load<UDataTable>(AssetRoot + TEXT("Data/DT_MarketItems_UI")),
                 Load<UDataTable>(Release + TEXT("DT_Owl")), Seed, Load<UDataTable>(Release + TEXT("DT_Endings"))),
                 TEXT("Configure saved UI tables: ") + Run->GetLastError().ToString())) return false;
             Report.Note(FString::Printf(TEXT("SESSION seed=%d scenario=%s savedMaxDays=%d"), Seed, *PreviewPrefix, SavedRules.MaxDays));
@@ -250,9 +281,11 @@ namespace
             if (!Report.Check(Controller->GetWorld() == World && Root->GetWorld() == World && Root->GetOwningPlayer() == Controller,
                 TEXT("Controller, root and local player resolve the fixture world")) ||
                 !Report.Check(bControllerRegistered, TEXT("Spawned controller was registered by normal actor initialization"))) return false;
+            if (!Report.Check(Controller->AudioPalette && Controller->ShopAudio && Controller->ShopAudio->InitializeAudio(Controller->AudioPalette,false),
+                TEXT("Saved player controller config initializes its audio observer without a physical output device"))) return false;
             if (!Report.Check(Run->RegisterView(Root.Get()), TEXT("Register actual root ShopView"))) return false;
             Pages = Child<UWidgetSwitcher>(Root.Get(), TEXT("Pages"));
-            if (!Report.Check(Pages && Pages->GetChildrenCount() == 11, TEXT("Runtime root contains all eleven real page instances"))) return false;
+            if (!Report.Check(Pages && Pages->GetChildrenCount() == 13, TEXT("Runtime root contains all thirteen real page instances"))) return false;
             return Report.Check(UShopPresentationLibrary::GetRootView(Root.Get()) == Root.Get(), TEXT("Nested UI can resolve its actual root through the local controller"));
         }
 
@@ -265,11 +298,14 @@ namespace
                 FString::Printf(TEXT("%s: phase=%d page=%d"), *Label, static_cast<int32>(S.Phase), Pages->GetActiveWidgetIndex()));
             if (bPass)
             {
+                if (!VerifyAudioScene()) return false;
                 if (!VerifyHudValues()) return false;
                 if ((Phase == EGamePhase::Day || Phase == EGamePhase::Sell) && !VerifyCustomerPortraitSelection()) return false;
                 const FString Name = FString::Printf(TEXT("%s_%02d_page%d"), *PreviewPrefix, PreviewIndex++, PageIndex);
                 // Rendering uses the real current page; the verifier never changes the switcher for a screenshot.
                 if (bCapturePreviews && !Report.Check(ShopUIPreview::Save(Root.Get(), Name), TEXT("Render current page or explicitly skip unavailable renderer: ") + Name)) return false;
+                if (bCaptureSmallPreviews && !Report.Check(ShopUIPreview::Save(Root.Get(), Name + TEXT("_720p"), FIntPoint(1280,720)),
+                    TEXT("Render 720p and check actual text bounds: ") + Name)) return false;
             }
             return bPass;
         }
@@ -283,18 +319,103 @@ namespace
             if (!Report.Check(IsVisibleThroughParents(Button) && IsVisibleThroughParents(Owner),
                 FString::Printf(TEXT("Button and ancestor visibility allow clicking: %s.%s"), *GetNameSafe(Owner), *Name.ToString()))) return false;
             UUserWidget* PageOwner = Owner;
+            UUserWidget* Decree=Page(TEXT("DecreePage"));
+            UWidgetSwitcher* DecreePages=Child<UWidgetSwitcher>(Decree,TEXT("DecreePages"));
+            if(Owner==Child<UUserWidget>(Decree,TEXT("IntroductionPage")))
+            {
+                PageOwner=Decree;
+                if(!Report.Check(DecreePages && DecreePages->GetActiveWidgetIndex()==1,TEXT("Introduction button belongs to the visible nested page")))return false;
+            }
+            else if(Owner==Decree && !Report.Check(DecreePages && DecreePages->GetActiveWidgetIndex()==0,TEXT("Selection button belongs to the visible nested page")))return false;
             if (Owner && Owner->GetName().StartsWith(TEXT("Card_")))
             {
                 if (Snapshot().Phase == EGamePhase::Sell) PageOwner = Page(TEXT("ShelfPage"));
                 else if (Snapshot().Phase == EGamePhase::Restock) PageOwner = Page(TEXT("MerchantPage"));
                 else if (Snapshot().Phase == EGamePhase::Inside) PageOwner = Page(TEXT("InsidePage"));
+                else if (Snapshot().Phase == EGamePhase::Market) PageOwner = Page(TEXT("BlackMarketPage"));
             }
-            if (!Report.Check(Pages && Pages->GetActiveWidget() == PageOwner,
+            if (!Report.Check(Pages && (Pages->GetActiveWidget() == PageOwner || Owner == Root.Get()),
                 TEXT("Button belongs to the active page (not a hidden switcher page)"))) return false;
+            UShopAudioComponent* Audio=Controller->ShopAudio;
+            if(!Report.Check(Button->OnHovered.IsBound(),TEXT("Interactive button has saved hover audio hook")))return false;
+            const FRunSnapshot AudioBefore=Snapshot();
+            const int32 SoldBefore=Audio->EventCount(TEXT("Sale_Success"));
+            const int32 BuyBefore=Audio->EventCount(TEXT("Purchase_Normal"));
+            const int32 BlackBuyBefore=Audio->EventCount(TEXT("Purchase_Secret"));
+            const int32 ReadBefore=Audio->EventCount(TEXT("Read_Secret"));
+            const int32 EnactBefore=Audio->EventCount(TEXT("Decree_Enact"));
+            const int32 MusicBefore=Audio->MusicStartCount();
             Button->OnClicked.Broadcast();
+            const FRunSnapshot AudioAfter=Snapshot();
+            const bool Success=Run->GetLastResult().bSucceeded;
+            if(!Report.Check(Audio->EventCount(TEXT("Sale_Success"))-SoldBefore==(AudioAfter.TotalSold>AudioBefore.TotalSold?1:0),TEXT("Cash sound occurs exactly once for a completed sale")))return false;
+            if(Owner->GetName().StartsWith(TEXT("Card_")) && Name==TEXT("BtnPrimary"))
+            {
+                if(AudioBefore.Phase==EGamePhase::Restock && !Report.Check(Audio->EventCount(TEXT("Purchase_Normal"))-BuyBefore==(Success?1:0),TEXT("Normal purchase sound follows actual purchase result")))return false;
+                if(AudioBefore.Phase==EGamePhase::Market && !Report.Check(Audio->EventCount(TEXT("Purchase_Secret"))-BlackBuyBefore==(Success?1:0),TEXT("Black-market purchase sound follows actual purchase result")))return false;
+            }
+            if(Name==TEXT("BtnRead") && !Report.Check(Audio->EventCount(TEXT("Read_Secret"))-ReadBefore==(Success?1:0),TEXT("Secret reading sound follows actual reading result")))return false;
+            if(Owner==Page(TEXT("DecreePage")))
+            {
+                if(!Report.Check(Audio->EventCount(TEXT("Decree_Enact"))-EnactBefore==(Name==TEXT("BtnConfirm") && Success?1:0),TEXT("Decree selection/description cannot play enactment; successful confirm plays once")))return false;
+            }
+            if((Name==TEXT("BtnDecrees") || Name==TEXT("BtnIntroduction") || Name==TEXT("BtnSkip")) &&
+                !Report.Check(Audio->MusicStartCount()==MusicBefore,TEXT("Modal navigation preserves current music playback position")))return false;
+            if(!VerifyAudioScene())return false;
             if (Owner && Owner->GetName().StartsWith(TEXT("Card_")) && Snapshot().Phase == EGamePhase::Restock)
                 return VerifyMerchantPurchaseOpen();
             return true;
+        }
+
+        bool VerifyAudioScene()
+        {
+            UShopAudioComponent* Audio=Controller->ShopAudio;
+            const FRunSnapshot S=Snapshot();
+            const bool Menu=Pages && Pages->GetActiveWidgetIndex()<2;
+            const bool Modal=!Menu && (S.Phase==EGamePhase::Calm || S.Phase==EGamePhase::History);
+            if(!Report.Check(Audio->bModalDucked==Modal,TEXT("Modal music ducking matches the displayed page")))return false;
+            FName Expected=TEXT("Music_Title");
+            if(!Menu && !Modal)
+            {
+                if(S.Phase==EGamePhase::Day || S.Phase==EGamePhase::Sell || S.Phase==EGamePhase::DayEnd)Expected=TEXT("Music_Shop");
+                if(S.Phase==EGamePhase::Restock)Expected=TEXT("Music_Market");
+                if(S.Phase==EGamePhase::Inside || S.Phase==EGamePhase::Market)Expected=TEXT("Music_Inside");
+                if(S.Phase==EGamePhase::End)
+                    Expected=(S.Ending==EShopEnding::Closed||S.Ending==EShopEnding::FailedRedemption)?TEXT("Music_End_Closed"):S.Ending==EShopEnding::PollutionReleased?TEXT("Music_End_Release"):
+                        S.Ending==EShopEnding::Returned?TEXT("Music_End_Return"):TEXT("Music_End_Cycle");
+            }
+            if(!Modal && !Report.Check(Audio->CurrentMusic==Expected,TEXT("Music route matches actual scene or ending: ")+Expected.ToString()))return false;
+            if(!Menu)
+            {
+                const int32 Starts=Audio->MusicStartCount(),Bells=Audio->EventCount(TEXT("Customer_Arrive")),History=Audio->EventCount(TEXT("History_Found"));
+                IShopView::Execute_RefreshShop(Audio,S);
+                if(!Report.Check(Audio->MusicStartCount()==Starts && Audio->EventCount(TEXT("Customer_Arrive"))==Bells && Audio->EventCount(TEXT("History_Found"))==History,
+                    TEXT("Repeated state refresh does not restart music, arrival bell or fragment sting")))return false;
+            }
+            return true;
+        }
+
+        bool AudioEdges()
+        {
+            if(!Tutorial() || !WaitForArrival())return false;
+            UShopAudioComponent* Audio=Controller->ShopAudio;
+            const int32 Timeout=Audio->EventCount(TEXT("Customer_Timeout"));
+            const int32 Index=UShopPresentationLibrary::GetCurrentCustomerIndex(Root.Get());
+            Run->Tick(Run->GetCustomers_Implementation()[Index].Patience+.01f);
+            if(!Report.Check(Audio->EventCount(TEXT("Customer_Timeout"))==Timeout+1,TEXT("Real patience expiry emits exactly one timeout sound")))return false;
+            IShopView::Execute_RefreshShop(Audio,Snapshot()); Run->Tick(0.f);
+            if(!Report.Check(Audio->EventCount(TEXT("Customer_Timeout"))==Timeout+1,TEXT("Timeout feedback is not repeated by zero tick or UI refresh")))return false;
+            const int32 Purchases=Audio->EventCount(TEXT("Purchase_Normal")),Errors=Audio->EventCount(TEXT("Sale_Wrong"));
+            Run->RequestRestock_Implementation(TEXT("book_novel"));
+            UShopAudioLibrary::AfterUICommand(Root.Get(),TEXT("RequestRestock"));
+            if(!Report.Check(!Run->GetLastResult().bSucceeded && Audio->EventCount(TEXT("Purchase_Normal"))==Purchases &&
+                Audio->EventCount(TEXT("Sale_Wrong"))==Errors+1,TEXT("Failed purchase emits error feedback and never a purchase sound")))return false;
+            UButton* Hover=Child<UButton>(Root.Get(),TEXT("BtnDecrees"));
+            const int32 BeforeHover=Audio->EventCount(TEXT("UI_Hover"));
+            Hover->OnHovered.Broadcast(); Hover->OnHovered.Broadcast();
+            if(!Report.Check(Audio->EventCount(TEXT("UI_Hover"))==BeforeHover+1,TEXT("Real saved hover hook dispatches once and throttles immediate repetition")))return false;
+            Audio->SetMuted(true); Audio->SetMixLevels(-2.f,2.f,1.f,1.f); Audio->SetMuted(false); Audio->SetMixLevels(1.f,1.f,1.f,1.f);
+            return VerifyAudioScene();
         }
 
         static bool IsVisibleThroughParents(const UWidget* Widget)
@@ -413,6 +534,8 @@ namespace
 
         bool WaitForArrival()
         {
+            const int32 BellsBefore=Controller->ShopAudio->EventCount(TEXT("Customer_Arrive"));
+            const bool WasPresent=Run->IsCurrentCustomerPresent();
             if (!Report.Check(Snapshot().Phase == EGamePhase::Day, TEXT("Await visitor only in the actual daytime phase"))) return false;
             const auto Before = Run->GetCustomers_Implementation();
             int32 Index = INDEX_NONE;
@@ -437,6 +560,7 @@ namespace
                     Run->Tick(FMath::Min(0.1f, Snapshot().CustomerArrivalRemaining));
             }
             const auto After = Run->GetCustomers_Implementation();
+            if(!Report.Check(Controller->ShopAudio->EventCount(TEXT("Customer_Arrive"))-BellsBefore==(WasPresent?0:1),TEXT("Arrival timer plays one doorbell only when the visitor becomes present")))return false;
             if (!Report.Check(Run->IsCurrentCustomerPresent() && Snapshot().bCustomerPresent &&
                 UShopPresentationLibrary::GetCurrentCustomerIndex(Root.Get()) == Index && After.Num() == Before.Num() &&
                 After.IsValidIndex(Index) && !After[Index].bServed && FMath::IsNearlyEqual(After[Index].Patience, Before[Index].Patience),
@@ -473,7 +597,8 @@ namespace
             };
             for (const FHudField& Field : Fields)
                 if (!TextEquals(Root.Get(), FName(Field.WidgetName), UShopPresentationLibrary::GetHudStatText(Root.Get(), Field.Field))) return false;
-            return true;
+            return Report.Check(Snapshot().PsychicMax == 0, TEXT("Snapshot exposes no gameplay psychic cap")) &&
+                TextEquals(Root.Get(), TEXT("HUD_Psychic"), FText::FromString(FString::FromInt(Snapshot().Psychic)));
         }
 
         bool VerifyProvidedTexture(UObject* Resource, const TCHAR* AssetName, const TCHAR* SourceFilename, int32 Width, int32 Height)
@@ -583,6 +708,25 @@ namespace
 
         bool VerifyProvidedArt()
         {
+            UImage* PsychicArt=Child<UImage>(Root.Get(),TEXT("HUD_PsychicArt"));
+            UCanvasPanelSlot* PsychicArtSlot=PsychicArt?Cast<UCanvasPanelSlot>(PsychicArt->Slot):nullptr;
+            const FBox2f PsychicUV=PsychicArt?FBox2f(PsychicArt->Brush.GetUVRegion()):FBox2f(ForceInit);
+            if (!Report.Check(PsychicArtSlot && PsychicUV.bIsValid && PsychicUV.Min.Equals(FVector2f::ZeroVector) && PsychicUV.Max.Equals(FVector2f(1,1)) &&
+                PsychicArt->Brush.GetImageSize().Equals(FVector2D(146,46)) && PsychicArtSlot->GetPosition().Equals(FVector2D(726,3)) &&
+                PsychicArtSlot->GetSize().Equals(FVector2D(219,69)) && !Root->WidgetTree->FindWidget(TEXT("PsychicIcon")) &&
+                !Root->WidgetTree->FindWidget(TEXT("PsychicTitle")),TEXT("Psychic artwork retains the complete original icon, caption, background and geometry without cropped overlays"))) return false;
+            for (const TCHAR* Field:{TEXT("Day"),TEXT("Money"),TEXT("Stock"),TEXT("Psychic"),TEXT("Pollution"),TEXT("Enlighten"),TEXT("Queue")})
+            {
+                UTextBlock* Value=Child<UTextBlock>(Root.Get(),FName(*(FString(TEXT("HUD_"))+Field)));
+                UScaleBox* Fit=Value?Cast<UScaleBox>(Value->GetParent()):nullptr;
+                UCanvasPanelSlot* Box=Fit?Cast<UCanvasPanelSlot>(Fit->Slot):nullptr;
+                UScaleBoxSlot* TextSlot=Value?Cast<UScaleBoxSlot>(Value->Slot):nullptr;
+                const bool Psychic=FString(Field)==TEXT("Psychic");
+                const bool Geometry=Box && (Psychic ? Box->GetPosition().Equals(FVector2D(837,6)) && Box->GetSize().Equals(FVector2D(102,46.5)) :
+                    FMath::IsNearlyEqual(Box->GetPosition().Y,9.f) && FMath::IsNearlyEqual(Box->GetSize().Y,55.f));
+                if (!Report.Check(Box&&TextSlot&&TextSlot->GetHorizontalAlignment()==HAlign_Center&&TextSlot->GetVerticalAlignment()==VAlign_Center&&
+                    Geometry,TEXT("HUD values are centered within their original display fields"))) return false;
+            }
             struct FHudArt { const TCHAR* WidgetName; const TCHAR* AssetName; const TCHAR* SourceName; int32 Width; int32 Height; };
             const FHudArt Images[] = {
                 { TEXT("HUD_MoneyArt"), TEXT("T_HUDMoney"), TEXT("金钱.png"), 241, 55 },
@@ -632,8 +776,8 @@ namespace
             UButton* Unlist = Child<UButton>(Card, TEXT("BtnUnlist"));
             UTextBlock* Feedback = Child<UTextBlock>(Card, TEXT("Feedback"));
             UScrollBox* Description = Child<UScrollBox>(Card, TEXT("DescriptionScroll"));
-            const float CardHeight = bHasUnlist ? 630.f : 570.f;
-            const float FooterHeight = bHasUnlist ? 152.f : 92.f;
+            const float CardHeight = bHasUnlist ? 686.f : 570.f;
+            const float FooterHeight = bHasUnlist ? 208.f : 92.f;
             if (!Report.Check(Size && Paper && Canvas && Actions && Primary && Feedback && Description &&
                 FMath::IsNearlyEqual(Size->GetWidthOverride(), 380.f) && FMath::IsNearlyEqual(Size->GetHeightOverride(), CardHeight) &&
                 Paper->GetParent() == Size && Canvas->GetParent() == Paper && Actions->GetParent() == Canvas &&
@@ -641,11 +785,13 @@ namespace
                 HasFixedCanvasRect(Actions, FVector2D(0, 446), FVector2D(344, FooterHeight)) &&
                 HasFixedCanvasRect(Primary, FVector2D(0, 0), FVector2D(344, 48)) &&
                 HasFixedCanvasRect(Description, FVector2D(0, 280), FVector2D(344, 96)) &&
-                HasFixedCanvasRect(Feedback, FVector2D(0, bHasUnlist ? 112 : 54), FVector2D(344, bHasUnlist ? 40 : 38)),
+                HasFixedCanvasRect(Feedback, FVector2D(0, bHasUnlist ? 168 : 54), FVector2D(344, bHasUnlist ? 40 : 38)),
                 TEXT("Actual card has an independent scrolling description and fixed primary-action/footer rectangles: ") + GetNameSafe(Card))) return false;
             if (!Report.Check(bHasUnlist ? (Unlist && Unlist->GetParent() == Actions &&
                     HasFixedCanvasRect(Unlist, FVector2D(0, 56), FVector2D(344, 48))) : Unlist == nullptr,
                 TEXT("Only secret-management cards contain the separated unlist button"))) return false;
+            if (bHasUnlist && !Report.Check(HasFixedCanvasRect(Child<UButton>(Card,TEXT("BtnRead")),FVector2D(0,112),FVector2D(344,48)),
+                TEXT("Reading button is aligned in each secret card footer"))) return false;
             const FMargin Padding = Paper->GetPadding();
             const UCanvasPanelSlot* ActionSlot = CastChecked<UCanvasPanelSlot>(Actions->Slot);
             const UCanvasPanelSlot* PrimarySlot = CastChecked<UCanvasPanelSlot>(Primary->Slot);
@@ -850,6 +996,7 @@ namespace
             if (!Report.Check(!BookId.IsNone(), TEXT("First ordinary visitor has a real stocked product"))) return false;
             FBookRuntime BeforeBook; Run->GetBookRuntime(BookId, BeforeBook);
             const int32 BeforeMoney = Snapshot().Money;
+            const int32 BeforeSales = Snapshot().TotalSold;
             if (!Click(Shop, TEXT("BtnShelf")) || !At(EGamePhase::Sell, 3, TEXT("Shelf button opens sale page"))) return false;
             if (!VerifyCustomerPortraitSelection(PortraitSlot) || !Click(Page(TEXT("ShelfPage")), TEXT("BtnDone")) ||
                 !At(EGamePhase::Day, 2, TEXT("Actual cancel-selection button returns to the same visitor")) ||
@@ -864,7 +1011,7 @@ namespace
             UUserWidget* Card = Child<UUserWidget>(Page(TEXT("ShelfPage")), FName(*(TEXT("Card_") + BookId.ToString())));
             if (!Click(Card, TEXT("BtnPrimary")) || !At(EGamePhase::Day, 2, TEXT("Book-card button completes sale"))) return false;
             FBookRuntime AfterBook; Run->GetBookRuntime(BookId, AfterBook);
-            if (!Report.Check(Snapshot().Money == BeforeMoney + Book.Price && AfterBook.Stock == BeforeBook.Stock - 1 && Snapshot().TotalSold == 1,
+            if (!Report.Check(Snapshot().Money == BeforeMoney + Book.Price && AfterBook.Stock == BeforeBook.Stock - 1 && Snapshot().TotalSold == BeforeSales + 1,
                 TEXT("Actual sale pays price and removes exactly one copy"))) return false;
             if (!Report.Check(Run->GetCustomers_Implementation()[0].bServed, TEXT("Actual sale resolves customer zero"))) return false;
             if (!SelectVisitor() || !Click(Shop, TEXT("BtnReject")) || !At(EGamePhase::Day, 2, TEXT("Reject second customer"))) return false;
@@ -981,6 +1128,7 @@ namespace
             FBookRuntime After; Run->GetBookRuntime(BookId, After);
             if (!Report.Check(After.Stock == Before.Stock - 1 && After.ListedCopies == Before.ListedCopies - 1 &&
                 Snapshot().Money == BeforeState.Money + Data.Price && Snapshot().TotalSold == BeforeState.TotalSold + 1 &&
+                Snapshot().Enlighten == BeforeState.Enlighten + 5 &&
                 Run->GetCustomers_Implementation()[0].bServed, TEXT("Threshold-crossing sale commits exactly once before the modal callback"))) return false;
             const auto Paused = Run->GetCustomers_Implementation();
             Run->Tick(5.f);
@@ -991,11 +1139,221 @@ namespace
             for (int32 Index = 0; Index < CalmState.DecreeCandidates.Num(); ++Index)
                 if (UShopPresentationLibrary::CanChooseDecree(Root.Get(), Index)) { Candidate = Index; break; }
             if (!Report.Check(Candidate != INDEX_NONE, TEXT("Real UI decree candidates include an affordable choice"))) return false;
-            if (!TextEquals(Page(TEXT("DecreePage")), FName(*FString::Printf(TEXT("DecreeTitle%d"), Candidate)), UShopPresentationLibrary::GetDecreeTitle(Root.Get(), Candidate))) return false;
-            if (!Click(Page(TEXT("DecreePage")), FName(*FString::Printf(TEXT("BtnDecree%d"), Candidate))) ||
+            if (!SelectDecree(CalmState.DecreeCandidates[Candidate],true) || !Click(Page(TEXT("DecreePage")),TEXT("BtnConfirm")) ||
                 !At(EGamePhase::Day, 2, TEXT("Actual decree click resumes daytime trading"))) return false;
             return Report.Check(Snapshot().Pollution < CalmState.Pollution && Snapshot().TotalSold == CalmState.TotalSold &&
                 Snapshot().Money <= CalmState.Money, TEXT("Decree applies its actual cost/effect without replaying the sale"));
+        }
+
+        bool SelectDecree(FName Id,bool InspectDetails=false)
+        {
+            UUserWidget* Decree=Page(TEXT("DecreePage"));
+            UUserWidget* Introduction=Child<UUserWidget>(Decree,TEXT("IntroductionPage"));
+            UWidgetSwitcher* Switcher=Child<UWidgetSwitcher>(Decree,TEXT("DecreePages"));
+            const FRunSnapshot Before=Snapshot(); const TArray<FCustomerRuntime> Queue=Run->GetCustomers_Implementation();
+            const FName Button=Id==TEXT("emergency_calm")?FName(TEXT("BtnEmergency")):FName(*(TEXT("BtnSelect_")+Id.ToString()));
+            if(!Click(Decree,Button))return false;
+            const FNameProperty* Selected=FindFProperty<FNameProperty>(Decree->GetClass(),TEXT("SelectedDecreeId"));
+            UImage* Preview=Child<UImage>(Decree,TEXT("SelectedPreview"));
+            const FString TextureName=Id==TEXT("emergency_calm")?TEXT("T_Decree_Bronze"):TEXT("T_Decree_")+Id.ToString();
+            if(!Report.Check(Selected && Selected->GetPropertyValue_InContainer(Decree)==Id && Switcher && Switcher->GetActiveWidgetIndex()==0 &&
+                Preview && Preview->BrushDelegate.IsBound(),TEXT("Card click selects its stable ID and binds the right-hand preview")))return false;
+            UTexture2D* Artwork=Cast<UTexture2D>(Preview->BrushDelegate.Execute().GetResourceObject());
+            if(!Report.Check(Artwork && Artwork->GetPathName()==ObjectPath(AssetRoot+TEXT("Art/Decrees/")+TextureName) &&
+                Artwork->Source.GetSizeX()==256 && Artwork->Source.GetSizeY()==512,TEXT("Preview uses the supplied full-size artwork for ")+Id.ToString()))return false;
+            for(FName Law:Run->GetDecreeIds())
+            {
+                UBorder* Border=Child<UBorder>(Decree,FName(*(TEXT("SelectionBorder_")+Law.ToString())));
+                if(!Report.Check(Border && Border->BrushColorDelegate.IsBound(),TEXT("Selection border is bound to stable ID: ")+Law.ToString()))return false;
+                const FLinearColor Color=Border->BrushColorDelegate.Execute();
+                if(!Report.Check(Law==Id ? Color.R>.9f && Color.G<.1f && Color.A==1.f : Color.A==0.f,TEXT("Only selected decree has a red border: ")+Law.ToString()))return false;
+            }
+            UButton* Confirm=Child<UButton>(Decree,TEXT("BtnConfirm")); UButton* Info=Child<UButton>(Decree,TEXT("BtnIntroduction"));
+            FText Reason; const bool CanEnact=Run->CanEnactDecree(Id,Reason);
+            if(!Report.Check(Confirm && Info && Confirm->bIsEnabledDelegate.IsBound() && Info->bIsEnabledDelegate.IsBound() &&
+                Confirm->bIsEnabledDelegate.Execute()==CanEnact && Info->bIsEnabledDelegate.Execute(),TEXT("Introduction remains available; confirm follows actual candidate, cost and cooldown rules")) ||
+                !TextEquals(Decree,TEXT("SelectedTitle"),UShopPresentationLibrary::GetDecreeNameById(Root.Get(),Id)))return false;
+            if(InspectDetails)
+            {
+                if(bCapturePreviews && !Report.Check(ShopUIPreview::Save(Root.Get(),PreviewPrefix+TEXT("_decree_selected_")+Id.ToString()),TEXT("Render selection page with original supplied components")))return false;
+                if(!Click(Decree,TEXT("BtnIntroduction")) || !Report.Check(Introduction && Switcher->GetActiveWidgetIndex()==1 && Snapshot().Phase==EGamePhase::Calm,
+                    TEXT("Introduction opens as a separate WBP while business stays paused")))return false;
+                UImage* Left=Child<UImage>(Introduction,TEXT("IntroductionArtwork"));
+                if(!Report.Check(Left && Left->BrushDelegate.IsBound() && Left->BrushDelegate.Execute().GetResourceObject()==Artwork,TEXT("Introduction left artwork matches selected right preview")) ||
+                    !TextEquals(Introduction,TEXT("DescriptionBody"),UShopPresentationLibrary::GetDecreeDescriptionById(Root.Get(),Id)) ||
+                    !TextEquals(Introduction,TEXT("DecreeStatus"),UShopPresentationLibrary::GetDecreeStatusText(Root.Get())) ||
+                    !TextEquals(Introduction,TEXT("BacklashLog"),UShopPresentationLibrary::GetBacklashLogText(Root.Get())))return false;
+                UScrollBox* Scroll=Child<UScrollBox>(Introduction,TEXT("IntroductionScroll"));
+                if(!Report.Check(Scroll && FMath::IsNearlyZero(Scroll->GetScrollOffset()),TEXT("Opening an introduction starts its description at the top")))return false;
+                Run->Tick(90.f);
+                if(bCapturePreviews && !Report.Check(ShopUIPreview::Save(Root.Get(),PreviewPrefix+TEXT("_decree_introduction_")+Id.ToString()),TEXT("Render left artwork and right effect description")))return false;
+                if(!Report.Check(FMath::IsNearlyZero(Scroll->GetScrollOffset()),TEXT("Description remains at the top after real Slate construction and rendering")))return false;
+                Scroll->SetScrollOffset(10000.f);
+                if(bCapturePreviews && Id==TEXT("bronze_01") && !Report.Check(ShopUIPreview::Save(Root.Get(),PreviewPrefix+TEXT("_decree_introduction_scrolled")),TEXT("Render scrollable status and backlash records")))return false;
+                if(!Click(Introduction,TEXT("BtnBack")) || !Report.Check(Switcher->GetActiveWidgetIndex()==0 && Selected->GetPropertyValue_InContainer(Decree)==Id,
+                    TEXT("Introduction back returns to selection and retains the same chosen card")))return false;
+            }
+            const FRunSnapshot After=Snapshot(); const auto AfterQueue=Run->GetCustomers_Implementation();
+            if(!Report.Check(After.Phase==Before.Phase && After.Money==Before.Money && After.Psychic==Before.Psychic && After.Pollution==Before.Pollution &&
+                After.Turn==Before.Turn && After.ActiveDecrees.Num()==Before.ActiveDecrees.Num() && After.DecreeCandidates==Before.DecreeCandidates &&
+                After.bCustomerPresent==Before.bCustomerPresent && After.CustomerArrivalRemaining==Before.CustomerArrivalRemaining && AfterQueue.Num()==Queue.Num(),
+                TEXT("Selection and introduction charge nothing, draw nothing, enact nothing and freeze arrivals")))return false;
+            for(int32 I=0;I<Queue.Num();++I)
+                if(!Report.Check(AfterQueue[I].Patience==Queue[I].Patience,TEXT("Introduction freezes every queued customer's patience")))return false;
+            return true;
+        }
+
+        bool DecreeSelectionReset()
+        {
+            UUserWidget* Decree=Page(TEXT("DecreePage"));
+            const FNameProperty* Id=FindFProperty<FNameProperty>(Decree->GetClass(),TEXT("SelectedDecreeId"));
+            UWidgetSwitcher* Switcher=Child<UWidgetSwitcher>(Decree,TEXT("DecreePages"));
+            UButton* Confirm=Child<UButton>(Decree,TEXT("BtnConfirm")); UButton* Intro=Child<UButton>(Decree,TEXT("BtnIntroduction"));
+            return Report.Check(Id && Id->GetPropertyValue_InContainer(Decree).IsNone() && Switcher && Switcher->GetActiveWidgetIndex()==0 &&
+                Confirm && Intro && !Confirm->bIsEnabledDelegate.Execute() && !Intro->bIsEnabledDelegate.Execute() &&
+                EffectiveVisibility(Child<UWidget>(Decree,TEXT("NoSelectionLabel")))==ESlateVisibility::HitTestInvisible &&
+                EffectiveVisibility(Child<UWidget>(Root.Get(),TEXT("HUD")))==ESlateVisibility::Collapsed,
+                TEXT("Fresh entry clears stale selection/detail, disables both actions, and keeps the supplied composition unobscured"));
+        }
+
+        bool ManualDecreePause()
+        {
+            const float Arrival=Snapshot().CustomerArrivalRemaining;
+            if(!Click(Root.Get(),TEXT("BtnDecrees")) || !At(EGamePhase::Calm,8,TEXT("Manual decree opened before customer arrival")))return false;
+            Run->Tick(90.f);
+            if(!Report.Check(!Snapshot().bCustomerPresent && FMath::IsNearlyEqual(Arrival,Snapshot().CustomerArrivalRemaining),TEXT("Real decree button freezes arrival clock")))return false;
+            if(!DecreeSelectionReset())return false;
+            for(FName Id:Run->GetDecreeIds())
+                if(!SelectDecree(Id,true))return false;
+            if(!SelectDecree(TEXT("emergency_calm"),true))return false;
+            if(!Click(Page(TEXT("DecreePage")),TEXT("BtnSkip")) || !At(EGamePhase::Day,2,TEXT("Manual close resumes waiting")) || !SelectVisitor())return false;
+            const int32 Index=UShopPresentationLibrary::GetCurrentCustomerIndex(Root.Get());
+            const float Patience=Run->GetCustomers_Implementation()[Index].Patience;
+            if(!Click(Root.Get(),TEXT("BtnDecrees")) || !DecreeSelectionReset())return false; Run->Tick(90.f);
+            if(!Report.Check(FMath::IsNearlyEqual(Run->GetCustomers_Implementation()[Index].Patience,Patience),TEXT("Real decree button freezes selected customer's patience")))return false;
+            const FRunSnapshot BeforeEmergency=Snapshot();
+            if(!SelectDecree(TEXT("emergency_calm"),true) || !Click(Page(TEXT("DecreePage")),TEXT("BtnConfirm")) ||
+                !Report.Check(Snapshot().Phase==EGamePhase::Day && Snapshot().Money==BeforeEmergency.Money-Run->GetRunRules().EmergencyMoneyCost &&
+                Snapshot().Pollution==FMath::Max(0,BeforeEmergency.Pollution-Run->GetRunRules().EmergencyPollutionCut),TEXT("Confirm applies emergency cost once and resumes daytime")))return false;
+            if(!Report.Check(IsVisibleThroughParents(Child<UWidget>(Page(TEXT("ShopPage")),TEXT("InteractionPanel"))),TEXT("Closing decree preserves the already selected customer panel")))return false;
+            Run->Tick(.5f);
+            return Report.Check(Run->GetCustomers_Implementation()[Index].Patience<Patience,TEXT("Patience runs again after closing"));
+        }
+
+        bool HistoryFlow(bool ExpectDrop)
+        {
+            if(!Click(Page(TEXT("NightChoicePage")),TEXT("BtnInside")) || !At(EGamePhase::Inside,7,TEXT("Inside includes per-book reading buttons")))return false;
+            if(!Click(Root.Get(),TEXT("BtnDecrees")) || !At(EGamePhase::Calm,8,TEXT("Manual decrees from inside")) ||
+                !Click(Page(TEXT("DecreePage")),TEXT("BtnSkip")) || !At(EGamePhase::Inside,7,TEXT("Close decree restores inside")))return false;
+            TSet<FName> Found; int32 Reads=0;
+            for(FName Id:Run->GetBookIds())
+            {
+                FBookData Data; int32 Stock=0; Run->GetBookInfo_Implementation(Id,Data,Stock);
+                if(Data.BookType!=EBookType::Secret || Stock<=0)continue;
+                UUserWidget* Card=Child<UUserWidget>(Page(TEXT("InsidePage")),FName(*(TEXT("Card_")+Id.ToString())));
+                const FRunSnapshot Before=Snapshot();
+                if(!Click(Card,TEXT("BtnRead")))return false; ++Reads;
+                if(!Report.Check(Snapshot().Psychic==Before.Psychic+10 && Snapshot().Pollution==Before.Pollution+10,
+                    TEXT("Actual read button grants ten psychic and ten base pollution")))return false;
+                if(!Report.Check(Snapshot().Enlighten==Before.Enlighten+(ExpectDrop?10:0),TEXT("New page grants ten enlightenment; probability miss grants zero")))return false;
+                if(ExpectDrop)
+                {
+                    if(!At(EGamePhase::History,11,TEXT("Actual read opens full history page")))return false;
+                    const FName PageId=Snapshot().PendingEventId; FEventData Event;
+                    if(!Report.Check(!Found.Contains(PageId)&&Run->GetEventInfo(PageId,Event),TEXT("Page is new and resolves to authored event")))return false;
+                    Found.Add(PageId);
+                    if(!TextEquals(Page(TEXT("HistoryPage")),TEXT("PageTitle"),Event.Title) ||
+                        !TextEquals(Page(TEXT("HistoryPage")),TEXT("HistoryBody"),Event.Text))return false;
+                    UScrollBox* Scroll=Child<UScrollBox>(Page(TEXT("HistoryPage")),TEXT("HistoryScroll"));
+                    if(!Report.Check(Scroll&&FMath::IsNearlyZero(Scroll->GetScrollOffset()),TEXT("Each newly found page starts at the top")))return false;
+                    if(bCapturePreviews)
+                    {
+                        Scroll->SetScrollOffset(10000.f);
+                        if(!Report.Check(ShopUIPreview::Save(Root.Get(),TEXT("history_bottom_")+PageId.ToString()),TEXT("Render last paragraphs through real scroll container")))return false;
+                    }
+                    if(!Click(Page(TEXT("HistoryPage")),TEXT("BtnDone")))return false;
+                }
+                else if(!Report.Check(Snapshot().CollectedHistoryPages.IsEmpty()&&Snapshot().Phase==EGamePhase::Inside,TEXT("Probability miss grants psychic without a history modal")))return false;
+                if(Snapshot().Phase==EGamePhase::Calm)
+                {
+                    if(!At(EGamePhase::Calm,8,TEXT("Pending threshold modal follows the fragment")) || !Click(Page(TEXT("DecreePage")),TEXT("BtnSkip")))return false;
+                }
+                if(!Report.Check(Snapshot().Psychic==Before.Psychic+10 && Snapshot().Pollution==Before.Pollution+10,
+                    TEXT("Closing all modals does not award or charge a second time")))return false;
+                if(!Report.Check(Snapshot().Enlighten==Before.Enlighten+(ExpectDrop?10:0),TEXT("Closing page/decrees cannot duplicate the enlightenment reward")))return false;
+                UButton* Read=Child<UButton>(Card,TEXT("BtnRead"));
+                if(!Report.Check(Read && Read->bIsEnabledDelegate.IsBound() && !Read->bIsEnabledDelegate.Execute(),TEXT("Already read title button is disabled tonight")))return false;
+                if(!TextEquals(Card,TEXT("BtnRead_Caption"),FText::FromString(TEXT("今晚已翻阅"))))return false;
+                if(!ExpectDrop)break;
+            }
+            return Report.Check(Reads==(ExpectDrop?7:1) && Found.Num()==(ExpectDrop?7:0),TEXT("Real card flows cover all seven original pages or the probability-miss branch"));
+        }
+
+        bool DecreeLifetimeFlow()
+        {
+            if(!Click(Page(TEXT("NightChoicePage")),TEXT("BtnInside")))return false;
+            int32 ReadCount=0;
+            for(FName Id:Run->GetBookIds())
+            {
+                FBookData Book; int32 Stock; Run->GetBookInfo_Implementation(Id,Book,Stock);
+                if(Book.BookType!=EBookType::Secret || Stock<=0)continue;
+                if(!Click(Child<UUserWidget>(Page(TEXT("InsidePage")),FName(*(TEXT("Card_")+Id.ToString()))),TEXT("BtnRead")))return false;
+                if(++ReadCount==4)break;
+            }
+            if(!At(EGamePhase::Calm,8,TEXT("Four reads unlock actual bronze laws")))return false;
+            const FName Quiet(TEXT("bronze_01")); const int32 Candidate=Snapshot().DecreeCandidates.IndexOfByKey(Quiet);
+            if(!Report.Check(Candidate!=INDEX_NONE,TEXT("Authored quiet decree is available in light stage")))return false;
+            if(!SelectDecree(Quiet,true) || !Click(Page(TEXT("DecreePage")),TEXT("BtnConfirm")) || !Click(Root.Get(),TEXT("BtnDecrees")))return false;
+            PreviewPrefix=TEXT("decree_lifetime");
+            if(!At(EGamePhase::Calm,8,TEXT("Reopen shows active lifetime")) ||
+                !Report.Check(UShopPresentationLibrary::GetDecreeStatusText(Root.Get()).ToString().Contains(TEXT("生效中，到反噬剩余 2 回合")),TEXT("UI shows two real remaining turns")) ||
+                !Click(Page(TEXT("DecreePage")),TEXT("BtnSkip")) || !Click(Page(TEXT("InsidePage")),TEXT("BtnDone")) ||
+                !Click(Page(TEXT("NightEndPage")),TEXT("BtnContinue")) || !ServeDay())return false;
+            if(!Click(Page(TEXT("NightChoicePage")),TEXT("BtnInside")) || !Click(Page(TEXT("InsidePage")),TEXT("BtnDone")) ||
+                !Click(Page(TEXT("NightEndPage")),TEXT("BtnContinue")) || !Click(Root.Get(),TEXT("BtnDecrees")))return false;
+            if(!At(EGamePhase::Calm,8,TEXT("Two settlements trigger backlash and cooldown")))return false;
+            if(!Report.Check(Snapshot().DecreeBacklashLog.Num()==1 && UShopPresentationLibrary::GetDecreeStatusText(Root.Get()).ToString().Contains(TEXT("冷却中，剩余 3 回合")),
+                TEXT("Real decree cooldown and exactly one backlash log shown")))return false;
+            return SelectDecree(Quiet,true) && TextEquals(Child<UUserWidget>(Page(TEXT("DecreePage")),TEXT("IntroductionPage")),TEXT("BacklashLog"),UShopPresentationLibrary::GetBacklashLogText(Root.Get())) &&
+                TextEquals(Root.Get(),TEXT("LatestBacklash"),UShopPresentationLibrary::GetLatestBacklashText(Root.Get()));
+        }
+
+        bool BlackMarketFlow()
+        {
+            bCapturePreviews=false;
+            for(int32 Day=1;Day<=7;++Day)
+            {
+                for(int32 Visitor=0;Visitor<3;++Visitor)if(!SellCurrentOrdinary(false))return false;
+                if(!Click(Page(TEXT("DayEndPage")),TEXT("BtnContinue")))return false;
+                UButton* Option=Child<UButton>(Page(TEXT("NightChoicePage")),TEXT("BtnBlackMarket"));
+                if(!Report.Check(Option && (EffectiveVisibility(Option)==ESlateVisibility::Visible)==(Day==7),TEXT("Black market option appears only on the seventh night")))return false;
+                if(Day==7)break;
+                if(!Click(Page(TEXT("NightChoicePage")),TEXT("BtnMerchant")) || !RefillOrdinary(false) ||
+                    !Click(Page(TEXT("MerchantPage")),TEXT("BtnDone")) || !Click(Page(TEXT("NightEndPage")),TEXT("BtnContinue")))return false;
+            }
+            bCapturePreviews=true; PreviewPrefix=TEXT("weekly_market");
+            if(!At(EGamePhase::DuskChoice,5,TEXT("Seventh night has third choice")) || !Click(Page(TEXT("NightChoicePage")),TEXT("BtnBlackMarket")) ||
+                !At(EGamePhase::Market,12,TEXT("Black market enters merchant scene first")))return false;
+            UUserWidget* Market=Page(TEXT("BlackMarketPage")); UWidget* Panel=Child<UWidget>(Market,TEXT("PurchasePanel"));
+            if(!Report.Check(Panel && EffectiveVisibility(Panel)==ESlateVisibility::Collapsed,TEXT("Black market purchase panel starts hidden")))return false;
+            const UImage* Portrait=Child<UImage>(Market,TEXT("MerchantPortrait"));
+            const UImage* Original=Child<UImage>(Page(TEXT("MerchantPage")),TEXT("MerchantPortrait"));
+            if(!Report.Check(Portrait&&Original&&Portrait->Brush.GetResourceObject()==Original->Brush.GetResourceObject(),TEXT("Black market reuses supplied merchant portrait")))return false;
+            if(!Click(Market,TEXT("BtnMerchantHit")) || !At(EGamePhase::Market,12,TEXT("Merchant click reveals secret books")))return false;
+            const FName Id(TEXT("book_secret_01")); FMarketItemData Item; FBookRuntime Before,After;
+            if(!Report.Check(Run->GetMarketItemInfo(Id,Item)&&Run->GetBookRuntime(Id,Before),TEXT("Market book card links to real inventory by ID")))return false;
+            UUserWidget* Card=Child<UUserWidget>(Market,TEXT("Card_book_secret_01")); const auto StateBefore=Snapshot();
+            if(!TextEquals(Card,TEXT("BookDescription"),UShopPresentationLibrary::GetMarketBookDescription(Root.Get(),Id)) || !Click(Card,TEXT("BtnPrimary")))return false;
+            Run->GetBookRuntime(Id,After);
+            if(!Report.Check(After.Stock==Before.Stock+1&&After.StoredCopies==Before.StoredCopies+1&&After.ListedCopies==Before.ListedCopies&&
+                Snapshot().Money==StateBefore.Money-Item.Price&&Snapshot().Pollution==StateBefore.Pollution+5,TEXT("Actual black market purchase pays, stores unlisted copy and adds five pollution")))return false;
+            if(!Report.Check(EffectiveVisibility(Panel)==ESlateVisibility::SelfHitTestInvisible,TEXT("Inventory refresh leaves purchase panel open")))return false;
+            UButton* Buy=Child<UButton>(Card,TEXT("BtnPrimary"));
+            if(!Report.Check(Buy && !Buy->bIsEnabledDelegate.Execute(),TEXT("Bought offer disabled until next weekly market")))return false;
+            if(!Click(Market,TEXT("BtnClosePurchase")) || !At(EGamePhase::Market,12,TEXT("Close purchase returns to same black market scene")) ||
+                !Click(Market,TEXT("BtnDone")) || !At(EGamePhase::NightEnd,9,TEXT("Leaving black market settles night once")) ||
+                !Click(Page(TEXT("NightEndPage")),TEXT("BtnContinue")) || !At(EGamePhase::Day,2,TEXT("Seventh-night market returns to eighth-day shop")))return false;
+            return Report.Check(Snapshot().Day==8,TEXT("Market advances exactly one day"));
         }
 
         bool FinishShortRun()
@@ -1033,10 +1391,14 @@ namespace
                 for (FName Id : Table->GetRowNames())
                     if (const FEndingData* Row = Table->FindRow<FEndingData>(Id, TEXT("UIVerify")))
                         if (Row->Ending == Expected) { Authored = Row; break; }
-            if (!Report.Check(Authored && Snapshot().EndMessage.EqualTo(Authored->Text),
+            FFormatNamedArguments EndingArgs;
+            EndingArgs.Add(TEXT("Money"),FText::AsNumber(Snapshot().Money+Snapshot().RedemptionPaid,&FNumberFormattingOptions::DefaultNoGrouping()));
+            EndingArgs.Add(TEXT("Days"),FText::AsNumber(Snapshot().MaxDays,&FNumberFormattingOptions::DefaultNoGrouping()));
+            const FText ExpectedStory=Authored?FText::Format(Authored->Text,EndingArgs):FText::GetEmpty();
+            if (!Report.Check(Authored && Snapshot().EndMessage.EqualTo(ExpectedStory),
                 TEXT("Business ending text comes from the matching original DT_Endings row"))) return false;
             if (!TextEquals(Page(TEXT("EndingPage")), TEXT("EndingTitle"), Authored->Title) ||
-                !TextEquals(Page(TEXT("EndingPage")), TEXT("EndingStory"), Authored->Text) ||
+                !TextEquals(Page(TEXT("EndingPage")), TEXT("EndingStory"), ExpectedStory) ||
                 !TextEquals(Page(TEXT("EndingPage")), TEXT("EndingCondition"), UShopPresentationLibrary::GetEndingConditionText(Root.Get()))) return false;
             Report.Note(FString::Printf(TEXT("ENDING VERIFIED scenario=%s ending=%d day=%d/%d money=%d enlightenment=%d pollution=%d"),
                 *PreviewPrefix, static_cast<int32>(Expected), Snapshot().Day, Snapshot().MaxDays,
@@ -1060,7 +1422,7 @@ namespace
             }
             // The authored first-day stock has only two non-progressive history copies.
             // If all three visitors ask for history, sell an owned alternative once;
-            // subsequent nights restock the non-progressive book and preserve the Cycle strategy.
+            // subsequent nights restock the non-progressive book for the ordinary-sales strategy.
             if (Best.IsNone() && !bProgressive && bRequireStock) return PreferredBook(Type, true, true);
             return Best;
         }
@@ -1107,39 +1469,42 @@ namespace
             return true;
         }
 
-        bool FullThirtyFiveDays(bool bProgressive)
+        bool FullConfiguredDays(bool bProgressive)
         {
             bCapturePreviews = false;
-            if (!Report.Check(Snapshot().MaxDays == 35 && FixtureTables.IsEmpty(),
-                TEXT("Full-term scenario uses exact saved data: 35 days and zero fixture tables"))) return false;
-            for (int32 Day = 1; Day <= 35; ++Day)
+            if (!Report.Check(Snapshot().MaxDays == SavedRules.MaxDays && FixtureTables.IsEmpty(),
+                TEXT("Full-term scenario uses exact saved data: configured days and zero fixture tables"))) return false;
+            for (int32 Day = 1; Day <= SavedRules.MaxDays; ++Day)
             {
                 if (!At(EGamePhase::Day, 2, TEXT("Full-term daily opening")) ||
                     !Report.Check(Snapshot().Day == Day && Snapshot().Ending == EShopEnding::None,
                         TEXT("Exactly one next day, no early final-threshold ending"))) return false;
                 for (int32 Customer = 0; Customer < 3; ++Customer) if (!SellCurrentOrdinary(bProgressive)) return false;
                 if (!At(EGamePhase::DayEnd, 4, TEXT("Full-term third visitor settles the day")) ||
-                    !Click(Page(TEXT("DayEndPage")), TEXT("BtnContinue")) || !At(EGamePhase::DuskChoice, 5, TEXT("Full-term dusk choice")) ||
-                    !Click(Page(TEXT("NightChoicePage")), TEXT("BtnMerchant")) || !At(EGamePhase::Restock, 6, TEXT("Full-term merchant"))) return false;
-                if (Day < 35 && !RefillOrdinary(bProgressive)) return false;
-                if (Day == 35 && !VerifyMerchantScene()) return false;
+                    !Click(Page(TEXT("DayEndPage")), TEXT("BtnContinue")) || !At(EGamePhase::DuskChoice, 5, TEXT("Full-term dusk choice"))) return false;
+                UButton* MarketOption=Child<UButton>(Page(TEXT("NightChoicePage")),TEXT("BtnBlackMarket"));
+                if (!Report.Check(MarketOption && (EffectiveVisibility(MarketOption)==ESlateVisibility::Visible)==(Day%SavedRules.DaysPerWeek==0),
+                    FString::Printf(TEXT("Day %d black market visibility follows the weekly calendar, including the final night"),Day))) return false;
+                if (!Click(Page(TEXT("NightChoicePage")), TEXT("BtnMerchant")) || !At(EGamePhase::Restock, 6, TEXT("Full-term merchant"))) return false;
+                if (Day < SavedRules.MaxDays && !RefillOrdinary(bProgressive)) return false;
+                if (Day == SavedRules.MaxDays && !VerifyMerchantScene()) return false;
                 if (!Click(Page(TEXT("MerchantPage")), TEXT("BtnDone")) || !At(EGamePhase::NightEnd, 9, TEXT("Full-term completed night settlement"))) return false;
-                Report.Note(FString::Printf(TEXT("FULL35 day=%d seed-strategy=%s money=%d enlightenment=%d pollution=%d sold=%d"),
+                Report.Note(FString::Printf(TEXT("FULL_CALENDAR day=%d seed-strategy=%s money=%d enlightenment=%d pollution=%d sold=%d"),
                     Day, bProgressive ? TEXT("progressive") : TEXT("ordinary"), Snapshot().Money,
                     Snapshot().Enlighten, Snapshot().Pollution, Snapshot().TotalSold));
                 if (!Click(Page(TEXT("NightEndPage")), TEXT("BtnContinue"))) return false;
-                if (Day < 35 && !Report.Check(Snapshot().Phase == EGamePhase::Day && Snapshot().Day == Day + 1 && Snapshot().Ending == EShopEnding::None,
-                    TEXT("Before day35 the night-continue button opens the following day, not an ending"))) return false;
+                if (Day < SavedRules.MaxDays && !Report.Check(Snapshot().Phase == EGamePhase::Day && Snapshot().Day == Day + 1 && Snapshot().Ending == EShopEnding::None,
+                    TEXT("Before the configured final day the night-continue button opens the following day, not an ending"))) return false;
             }
-            return At(EGamePhase::End, 10, TEXT("Full-term day35 final continue opens ending")) &&
-                Report.Check(Snapshot().Day == 35 && Snapshot().TotalSold == 105,
-                    TEXT("All 105 real visitors resolved over exactly35 days; no day36 was created"));
+            return At(EGamePhase::End, 10, TEXT("Full-term configured final continue opens ending")) &&
+                Report.Check(Snapshot().Day == SavedRules.MaxDays && Snapshot().TotalSold == SavedRules.MaxDays*3,
+                    TEXT("All real visitors resolved over the configured calendar; no extra day was created"));
         }
 
         bool BankruptcyByRejection()
         {
             bCapturePreviews = false;
-            for (int32 Guard = 0; Guard < 35 && Snapshot().Phase != EGamePhase::End; ++Guard)
+            for (int32 Guard = 0; Guard < SavedRules.MaxDays && Snapshot().Phase != EGamePhase::End; ++Guard)
             {
                 for (int32 Visitor = 0; Visitor < 3; ++Visitor)
                     if (!SelectVisitor() || !Click(Page(TEXT("ShopPage")), TEXT("BtnReject"))) return false;
@@ -1152,7 +1517,7 @@ namespace
                 if (Snapshot().Phase == EGamePhase::End) break;
                 if (!Click(Page(TEXT("NightEndPage")), TEXT("BtnContinue"))) return false;
             }
-            if (!Report.Check(FixtureTables.IsEmpty() && Snapshot().NegativeDays >= 3 && Snapshot().Day < 35,
+            if (!Report.Check(FixtureTables.IsEmpty() && Snapshot().NegativeDays >= 3 && Snapshot().Day < SavedRules.MaxDays,
                 TEXT("Authored rent and three negative days trigger early closure with no altered data"))) return false;
             bCapturePreviews = true;
             return VerifyEnding(EShopEnding::Closed, TEXT("Real-data bankruptcy ending"));
@@ -1170,7 +1535,7 @@ namespace
             if (!Report.Check(!Id.IsNone(), TEXT("Pollution boundary uses an actually listed secret copy")) ||
                 !Click(Page(TEXT("ShopPage")), TEXT("BtnShelf")) ||
                 !Click(Child<UUserWidget>(Page(TEXT("ShelfPage")), FName(*(TEXT("Card_") + Id.ToString()))), TEXT("BtnPrimary"))) return false;
-            return Report.Check(Snapshot().Pollution >= SavedRules.PollutionLimit && Snapshot().MaxDays == 35 && Snapshot().Day == 2,
+            return Report.Check(Snapshot().Pollution >= SavedRules.PollutionLimit && Snapshot().MaxDays == SavedRules.MaxDays && Snapshot().Day == 2,
                 TEXT("Actual secret-sale transaction reaches the original ending-table pollution limit")) &&
                 VerifyEnding(EShopEnding::PollutionReleased, TEXT("Transient high-pollution sale boundary"));
         }
@@ -1223,6 +1588,33 @@ int32 UShopUIVerifyCommandlet::Main(const FString& Params)
     UWorld* Entry = Load<UWorld>(AssetRoot + TEXT("Maps/L_BookstoreUI"));
     bAssetsReady &= Report.Check(Entry && Entry->GetOutermost()->HasAnyPackageFlags(PKG_ContainsMap), TEXT("Saved entry .umap loads as a map package"));
     UWidgetBlueprint* Root = Load<UWidgetBlueprint>(AssetRoot + TEXT("WBP_UIRoot"));
+    if(FParse::Param(*Params,TEXT("AudioOnly")))
+    {
+        {
+            FSession Audio(Report); Audio.bCapturePreviews=false;
+            if(bAssetsReady && Audio.Start(PC->GeneratedClass,Root->GeneratedClass,false))Audio.AudioEdges();
+        }
+        Report.Note(FString::Printf(TEXT("AUDIO EDGE RESULT checks=%d failures=%d"),Report.Checks,Report.Failures));
+        FFileHelper::SaveStringToFile(Report.Lines,*(FPaths::ProjectSavedDir()/TEXT("Audio/EdgeVerification.txt")),FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+        return Report.Failures?1:0;
+    }
+    if(bAssetsReady)
+    {
+        UDataTable* Events=Load<UDataTable>(AssetRoot+TEXT("Data/DT_Events_UI"));
+        FString Json; TSharedPtr<FJsonObject> Document;
+        const bool Read=FFileHelper::LoadFileToString(Json,*(FPaths::ProjectDir()/TEXT("SourceArt/History/history_fragments.json"))) &&
+            FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Json),Document) && Document.IsValid();
+        const TArray<TSharedPtr<FJsonValue>>* Fragments=nullptr;
+        bAssetsReady &= Report.Check(Events && Read && Document->TryGetArrayField(TEXT("fragments"),Fragments) && Fragments->Num()==7 && Events->GetRowNames().Num()==7,
+            TEXT("Seven document sources and seven saved history rows"));
+        if(bAssetsReady)for(const auto& Value:*Fragments)
+        {
+            const auto Page=Value->AsObject(); const FString Id=Page->GetStringField(TEXT("id"));
+            const FEventData* Row=Events->FindRow<FEventData>(FName(*Id),TEXT("HistorySourceVerify"));
+            bAssetsReady &= Report.Check(Row && Row->Title.ToString()==Page->GetStringField(TEXT("title")) && Row->Text.ToString()==Page->GetStringField(TEXT("text")),
+                TEXT("Saved page exactly matches document paragraphs and masking: ")+Id);
+        }
+    }
     if (bAssetsReady)
     {
         {
@@ -1239,6 +1631,36 @@ int32 UShopUIVerifyCommandlet::Main(const FString& Params)
     }
     if (bAssetsReady)
     {
+        {
+            FSession Layout(Report); Layout.bCaptureSmallPreviews = true;
+            if (Layout.Start(PC->GeneratedClass, Root->GeneratedClass, true, false, 731, false, false, 0.f, 1234567890))
+            {
+                Layout.PreviewPrefix = TEXT("large_psychic_layout");
+                if (!Layout.Tutorial() || !Layout.ServeDay() || !Layout.Night(true))
+                    Report.Note(TEXT("Large psychic and small-screen layout scenario stopped at first failure."));
+            }
+        }
+        {
+            FSession Manual(Report); Manual.PreviewPrefix=TEXT("manual_decree");
+            if(!Manual.Start(PC->GeneratedClass,Root->GeneratedClass,true) || !Manual.Tutorial() || !Manual.ManualDecreePause())
+                Report.Note(TEXT("Manual decree UI scenario stopped at first failure."));
+        }
+        for(const float Chance:{0.f,1.f})
+        {
+            FSession History(Report);
+            if(!History.Start(PC->GeneratedClass,Root->GeneratedClass,true,false,731,false,false,Chance) || !History.Tutorial() || !History.ServeDay() || !History.HistoryFlow(Chance>0.f))
+                Report.Note(TEXT("History UI scenario stopped at first failure."));
+        }
+        {
+            FSession Decree(Report);
+            if(!Decree.Start(PC->GeneratedClass,Root->GeneratedClass,true,false,731,false,false,0.f) || !Decree.Tutorial() || !Decree.ServeDay() || !Decree.DecreeLifetimeFlow())
+                Report.Note(TEXT("Decree lifetime UI scenario stopped at first failure."));
+        }
+        {
+            FSession Market(Report); Market.bCapturePreviews=false;
+            if(!Market.Start(PC->GeneratedClass,Root->GeneratedClass,false) || !Market.Tutorial() || !Market.BlackMarketFlow())
+                Report.Note(TEXT("Weekly black market UI scenario stopped at first failure."));
+        }
         for (const bool bInside : { false, true })
         {
             Report.Note(bInside ? TEXT("BRANCH inside listing") : TEXT("BRANCH merchant restock"));
@@ -1256,36 +1678,54 @@ int32 UShopUIVerifyCommandlet::Main(const FString& Params)
             !Short.Click(Short.Page(TEXT("EndingPage")), TEXT("BtnMenu")) || !Short.Tutorial(EGamePhase::End) || !Short.VerifyRestartState())
             Report.Note(TEXT("Short scenario stopped at its first failure; no saved tables or runtime state were rewritten."));
 
-        Report.Note(TEXT("FULL35 CYCLE: exact saved tables, seed731; sell non-enlightenment ordinary books and purchase three-copy category buffers through actual buttons."));
+        Report.Note(TEXT("FULL THIRTY-FIVE DAYS: exact saved rules; real sales and restocking reach the final funding check."));
         {
-            FSession Cycle(Report);
-            Cycle.bCapturePreviews = false;
-            if (Cycle.Start(PC->GeneratedClass, Root->GeneratedClass, false) && Cycle.Tutorial() && Cycle.FullThirtyFiveDays(false))
+            FSession Natural(Report); Natural.bCapturePreviews=false;
+            if(Natural.Start(PC->GeneratedClass,Root->GeneratedClass,false)&&Natural.Tutorial()&&Natural.FullConfiguredDays(false))
             {
-                Cycle.PreviewPrefix = TEXT("full35_cycle"); Cycle.bCapturePreviews = true;
-                Cycle.VerifyEnding(EShopEnding::Cycle, TEXT("Real-data 35-day cycle ending"));
+                Natural.PreviewPrefix=TEXT("full35_empty_shelf"); Natural.bCapturePreviews=true;
+                Natural.VerifyEnding(EShopEnding::FailedRedemption,TEXT("Real saved 35-day ordinary-sales strategy ending"));
             }
         }
-        Report.Note(TEXT("FULL35 RETURNED: exact saved tables, prefer the three authored 50%-chance +2 books; bounded seed search731..746 is recorded, never alter money/stock/enlightenment/state."));
-        bool bReturnedReached = false;
-        for (int32 Seed = 731; Seed <= 746 && !bReturnedReached; ++Seed)
+        Report.Note(TEXT("FIVE ENDINGS: explicitly labelled transient editor presets; actual saved choice/restart buttons and unmodified five-row manuscript table."));
+        for(const EShopEndingTest Preset:{EShopEndingTest::EmptyShelf,EShopEndingTest::Pollution,EShopEndingTest::Closed,EShopEndingTest::Redeemed,EShopEndingTest::TruthChoice})
         {
-            const int32 FailuresBefore = Report.Failures;
-            FSession Returned(Report);
-            Returned.bCapturePreviews = false;
-            if (!Returned.Start(PC->GeneratedClass, Root->GeneratedClass, false, false, Seed) || !Returned.Tutorial() || !Returned.FullThirtyFiveDays(true)) break;
-            Report.Note(FString::Printf(TEXT("RETURNED SEED ATTEMPT seed=%d ending=%d enlightenment=%d money=%d"), Seed,
-                static_cast<int32>(Returned.Snapshot().Ending), Returned.Snapshot().Enlighten, Returned.Snapshot().Money));
-            if (Returned.Snapshot().Ending == EShopEnding::Returned)
+            FSession Ending(Report); Ending.bCapturePreviews=false;
+            if(!Ending.Start(PC->GeneratedClass,Root->GeneratedClass,false))continue;
+            Ending.PreviewPrefix=TEXT("ending_")+StaticEnum<EShopEndingTest>()->GetNameStringByValue(static_cast<int64>(Preset));
+            Ending.bCapturePreviews=true; Ending.bCaptureSmallPreviews=true;
+            const FString TestCommand=TEXT("ShopTestEnding ")+StaticEnum<EShopEndingTest>()->GetNameStringByValue(static_cast<int64>(Preset));
+            if(!Report.Check(Ending.Controller->ProcessConsoleExec(*TestCommand,*GLog,Ending.Controller),TEXT("Editor test console command works directly from the main menu")))continue;
+            UUserWidget* Page=Ending.Page(TEXT("EndingPage"));
+            UScrollBox* Scroll=Child<UScrollBox>(Page,TEXT("EndingStoryScroll"));
+            Report.Check(Scroll&&Child<UTextBlock>(Page,TEXT("EndingStory"))->GetParent()==Scroll,TEXT("Entire authored ending body is in an editable scrolling widget"));
+            if(Preset==EShopEndingTest::TruthChoice)
             {
-                Returned.PreviewPrefix = TEXT("full35_returned"); Returned.bCapturePreviews = true;
-                bReturnedReached = Returned.VerifyEnding(EShopEnding::Returned, TEXT("Real-data 35-day returned ending"));
+                if(!Ending.At(EGamePhase::EndingChoice,10,TEXT("Truth-qualified state asks before resolving")))continue;
+                Report.Check(Ending.Snapshot().Ending==EShopEnding::None&&Ending.Snapshot().Money==1500,TEXT("Choice does not auto-resolve or charge"));
+                if(!Ending.Click(Page,TEXT("BtnReturnTruth"))||!Ending.VerifyEnding(EShopEnding::Returned,TEXT("Actual Return Truth button")))continue;
+                Report.Check(Ending.Snapshot().RedemptionPaid==1500&&Ending.Snapshot().Money==0,TEXT("Return choice pays once"));
+                if(Scroll)
+                {
+                    Scroll->SetScrollOffset(10000.f);
+                    Report.Check(ShopUIPreview::Save(Ending.Root.Get(),TEXT("ending_Returned_story_bottom")),TEXT("Read the final paragraph of the true ending"));
+                }
+                if(!Report.Check(Ending.Controller->ProcessConsoleExec(*TestCommand,*GLog,Ending.Controller),TEXT("Editor test command also works after an ending")))continue;
+                if(!Ending.Click(Page,TEXT("BtnLeaveCity"))||!Ending.VerifyEnding(EShopEnding::Redeemed,TEXT("Actual Leave City button declines true ending")))continue;
             }
-            else if (!Report.Check(Returned.Snapshot().Ending == EShopEnding::Cycle,
-                TEXT("An unlucky progressive run may legitimately fall back to Cycle; other endings indicate a strategy failure"))) break;
-            if (Report.Failures != FailuresBefore) break;
+            else
+            {
+                const EShopEnding Expected=Preset==EShopEndingTest::EmptyShelf?EShopEnding::FailedRedemption:Preset==EShopEndingTest::Pollution?EShopEnding::PollutionReleased:
+                    Preset==EShopEndingTest::Closed?EShopEnding::Closed:EShopEnding::Redeemed;
+                if(!Ending.VerifyEnding(Expected,TEXT("Manuscript ending through actual root/page")))continue;
+            }
+            if(Scroll)
+            {
+                Scroll->SetScrollOffset(10000.f);
+                Report.Check(ShopUIPreview::Save(Ending.Root.Get(),Ending.PreviewPrefix+TEXT("_story_bottom")),TEXT("Render bottom of scrollable ending story"));
+            }
+            if(Ending.Click(Page,TEXT("BtnRestart")))Ending.VerifyRestartState();
         }
-        Report.Check(bReturnedReached, TEXT("Returned is reachable through an entire real35-day button-driven run with recorded seed"));
         Report.Note(TEXT("CLOSED: exact saved data; reject each arrived visitor, pay authored rent, and wait for the actual negative-day condition."));
         {
             FSession Closed(Report);
@@ -1296,7 +1736,7 @@ int32 UShopUIVerifyCommandlet::Main(const FString& Params)
                 Closed.BankruptcyByRejection();
             }
         }
-        Report.Note(TEXT("POLLUTION RELEASED: labelled transient pollution-per-sale boundary; all actions use real WBP buttons and the exact saved four-row ending table."));
+        Report.Note(TEXT("POLLUTION RELEASED: labelled transient pollution-per-sale boundary; all actions use real WBP buttons and the exact saved five-row ending table."));
         {
             FSession Pollution(Report);
             Pollution.bCapturePreviews = false;

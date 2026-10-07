@@ -55,7 +55,7 @@ namespace ShopEconomyReleaseTests
         Customer.PatienceSeconds = 20.f;
         C.Customers.Add(FName(Id), Customer);
     }
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShopOwnedSecretCopiesTest, "Bookstore.ProgramA.Release.InitialOwnedCopiesAndPsychicCap", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShopOwnedSecretCopiesTest, "Bookstore.ProgramA.Release.InitialOwnedCopiesAndUnlimitedPsychic", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FShopOwnedSecretCopiesTest::RunTest(const FString& Parameters)
 {
     FShopCatalog C = Catalog();
@@ -75,7 +75,7 @@ bool FShopOwnedSecretCopiesTest::RunTest(const FString& Parameters)
     TestEqual(TEXT("Reading records exactly one copy"), State.Inventory.FindChecked(Secret).ReadCopies, 1);
     State.Psychic = 99;
     TestTrue(TEXT("Second copy remains readable"), ShopEconomy::Read(State, C, Secret, Error));
-    TestEqual(TEXT("Psychic gain is capped at configured maximum"), State.Psychic, 100);
+    TestEqual(TEXT("Legacy cap does not truncate reading rewards"), State.Psychic, 107);
     TestTrue(TEXT("A new copy can be collected"), ShopEconomy::Collect(State, C, Secret, Error));
     const FBookRuntime& Collected = State.Inventory.FindChecked(Secret);
     TestEqual(TEXT("Collect increases owned copies"), Collected.Stock, 4);
@@ -324,6 +324,35 @@ bool FShopInvalidSecretInventoryTest::RunTest(const FString& Parameters)
         TestFalse(TEXT("Malformed inventory cannot be collected into"), ShopEconomy::Collect(State, C, Secret, Error));
         Unchanged();
     }
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FShopUnlimitedPsychicSupplyTest, "Bookstore.ProgramA.Release.UnlimitedPsychicSupplyAndOverflow", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FShopUnlimitedPsychicSupplyTest::RunTest(const FString& Parameters)
+{
+    FShopCatalog C = Catalog();
+    C.Rules.NightlyPsychicGain = 8;
+    FShopRunState State;
+    ShopEconomy::Reset(State, C);
+    FText Error;
+    State.Psychic = 99;
+    TestTrue(TEXT("Nightly supply crosses the former cap"), ShopEconomy::ApplyNightlySupply(State, C, Error));
+    TestEqual(TEXT("Full nightly psychic gain"), State.Psychic, 107);
+    C.Rules.PsychicMax = 0;
+    State.Psychic = 1000000;
+    TestTrue(TEXT("Reading remains available with large psychic reserves"), ShopEconomy::Read(State, C, Secret, Error));
+    TestEqual(TEXT("Large reading reward is not truncated"), State.Psychic, 1000008);
+    TestTrue(TEXT("Supply remains available with large psychic reserves"), ShopEconomy::ApplyNightlySupply(State, C, Error));
+    TestEqual(TEXT("Large supply reward is not truncated"), State.Psychic, 1000016);
+    State.Psychic = MAX_int32 - 3;
+    const int32 Pollution = State.Pollution;
+    const int32 ReadCopies = State.Inventory.FindChecked(Secret).ReadCopies;
+    TestFalse(TEXT("Overflowing reading is rejected atomically"), ShopEconomy::Read(State, C, Secret, Error));
+    TestEqual(TEXT("Failed read preserves psychic"), State.Psychic, MAX_int32 - 3);
+    TestEqual(TEXT("Failed read does not charge pollution"), State.Pollution, Pollution);
+    TestEqual(TEXT("Failed read does not consume an unread copy"), State.Inventory.FindChecked(Secret).ReadCopies, ReadCopies);
+    TestFalse(TEXT("Overflowing nightly supply is rejected"), ShopEconomy::ApplyNightlySupply(State, C, Error));
+    TestEqual(TEXT("Failed supply preserves psychic"), State.Psychic, MAX_int32 - 3);
     return true;
 }
 

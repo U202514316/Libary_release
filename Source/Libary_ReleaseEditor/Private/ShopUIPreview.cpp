@@ -3,7 +3,10 @@
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
+#include "Components/Button.h"
 #include "Components/Image.h"
+#include "Components/ScaleBox.h"
+#include "Components/TextBlock.h"
 #include "DynamicRHI.h"
 #include "Engine/Texture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
@@ -24,7 +27,45 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogShopUIPreview, Log, All);
 
-bool ShopUIPreview::Save(UUserWidget* Root, const FString& Name)
+namespace
+{
+    bool CheckTextBounds(UUserWidget* Root, const FString& Name)
+    {
+        bool Good = true;
+        int32 Checked = 0;
+        Root->WidgetTree->ForEachWidgetAndDescendants([&](UWidget* Widget)
+        {
+            UTextBlock* Text = Cast<UTextBlock>(Widget);
+            UScaleBox* Fit = Text ? Cast<UScaleBox>(Text->GetParent()) : nullptr;
+            const bool HudText=Text && Text->GetName().StartsWith(TEXT("HUD_"));
+            if (!Fit || !Text->IsVisible() || (!Text->GetName().Contains(TEXT("_Caption")) && !HudText && !Text->GetName().StartsWith(TEXT("DecreeStat_")))) return;
+            // Commandlet previews paint without ticking widgets; cached/tick geometry stays empty.
+            const FGeometry& Outer = Fit->GetPaintSpaceGeometry();
+            const FGeometry& Inner = Text->GetPaintSpaceGeometry();
+            if (Outer.GetLocalSize().X <= 0 || Outer.GetLocalSize().Y <= 0 || Inner.GetLocalSize().IsNearlyZero()) return;
+            const FVector2D Top = Outer.AbsoluteToLocal(Inner.LocalToAbsolute(FVector2D::ZeroVector));
+            const FVector2D Bottom = Outer.AbsoluteToLocal(Inner.LocalToAbsolute(Inner.GetLocalSize()));
+            if (Top.X < -1.f || Top.Y < -1.f || Bottom.X > Outer.GetLocalSize().X + 1.f || Bottom.Y > Outer.GetLocalSize().Y + 1.f)
+            {
+                UE_LOG(LogShopUIPreview, Error, TEXT("Text overflow in %s: %s top=%s bottom=%s container=%s"),
+                    *Name, *Text->GetPathName(), *Top.ToString(), *Bottom.ToString(), *Outer.GetLocalSize().ToString());
+                Good = false;
+            }
+            if (HudText && !((Top+Bottom)*.5f).Equals(Outer.GetLocalSize()*.5f,1.f))
+            {
+                UE_LOG(LogShopUIPreview,Error,TEXT("HUD text not centered in %s: %s"),*Name,*Text->GetName());
+                Good=false;
+            }
+            ++Checked;
+        });
+        // The tutorial and artwork-only subpages legitimately have no text buttons or visible HUD.
+        // Report their zero count explicitly, without claiming a caption was measured there.
+        UE_LOG(LogShopUIPreview, Display, TEXT("Text bounds %s: checked=%d pass=%d"), *Name, Checked, Good);
+        return Good;
+    }
+}
+
+bool ShopUIPreview::Save(UUserWidget* Root, const FString& Name, FIntPoint Resolution)
 {
     static bool bLoggedContext = false;
     if (!bLoggedContext)
@@ -84,8 +125,9 @@ bool ShopUIPreview::Save(UUserWidget* Root, const FString& Name)
         return false;
     }
 
-    constexpr int32 Width = 1920;
-    constexpr int32 Height = 1080;
+    const int32 Width = Resolution.X;
+    const int32 Height = Resolution.Y;
+    if (Width <= 0 || Height <= 0) return false;
     // A commandlet does not tick the editor's asynchronous texture compiler or
     // streamer between page changes. Wait only for images referenced by this tree,
     // otherwise Slate can capture the checkerboard placeholder instead of the art.
@@ -108,6 +150,12 @@ bool ShopUIPreview::Save(UUserWidget* Root, const FString& Name)
         {
             AddBrushTexture(Border->Background);
             if (Border->BackgroundDelegate.IsBound()) AddBrushTexture(Border->BackgroundDelegate.Execute());
+        }
+        if (const UButton* Button = Cast<UButton>(Widget))
+        {
+            const FButtonStyle& Style = Button->WidgetStyle;
+            AddBrushTexture(Style.Normal); AddBrushTexture(Style.Hovered);
+            AddBrushTexture(Style.Pressed); AddBrushTexture(Style.Disabled);
         }
     });
     FTextureCompilingManager::Get().FinishCompilation(ImageTextures);
@@ -134,8 +182,12 @@ bool ShopUIPreview::Save(UUserWidget* Root, const FString& Name)
     Target->TargetGamma = 1.0f;
     Target->InitCustomFormat(Width, Height, PF_B8G8R8A8, true);
     Target->UpdateResourceImmediate(true);
-    Renderer.DrawWidget(Target.Get(), Root->TakeWidget(), FVector2D(Width, Height), 0.0f, false);
+    // A real viewport owns this reference during play. Keep it alive here as well,
+    // otherwise the temporary offscreen window releases all Slate geometry on return.
+    const TSharedRef<SWidget> SlateRoot = Root->TakeWidget();
+    Renderer.DrawWidget(Target.Get(), SlateRoot, FVector2D(Width, Height), 0.0f, false);
     FlushRenderingCommands();
+    const bool TextFits = CheckTextBounds(Root, Name);
     FTextureRenderTargetResource* Resource = Target->GameThread_GetRenderTargetResource();
     TArray<FColor> Pixels;
     FReadSurfaceDataFlags Flags(RCM_UNorm);
@@ -157,5 +209,5 @@ bool ShopUIPreview::Save(UUserWidget* Root, const FString& Name)
         return false;
     }
     UE_LOG(LogShopUIPreview, Display, TEXT("SAVED preview %s (%dx%d)"), *FPaths::ConvertRelativePathToFull(Filename), Width, Height);
-    return true;
+    return TextFits;
 }

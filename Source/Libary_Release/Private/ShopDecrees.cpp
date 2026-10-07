@@ -404,13 +404,9 @@ bool ShopEffects::Apply(FShopRunState& State, const FShopCatalog& Catalog,
             }
             break;
         case EShopEffectType::Psychic:
-            if (Catalog.Rules.PsychicMax < 0)
-                return Fail(Error, TEXT("PsychicMax must be nonnegative."));
-            if (bIsCost && Effect.Amount < 0 && static_cast<int64>(State.Psychic) + Effect.Amount < 0)
-                return Fail(Error, TEXT("There is not enough psychic energy to pay this effect."));
+            if (!ChangeNonnegativeResource(State.Psychic, Effect.Amount, bIsCost, Error))
             {
-                const int64 NextPsychic = static_cast<int64>(State.Psychic) + Effect.Amount;
-                State.Psychic = static_cast<int32>(FMath::Clamp<int64>(NextPsychic, 0, Catalog.Rules.PsychicMax));
+                return false;
             }
             break;
         case EShopEffectType::Enlighten:

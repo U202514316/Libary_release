@@ -143,9 +143,9 @@ bool FReleaseThirtyFiveDays::RunTest(const FString&)
     }
     TestEqual(TEXT("No day 36"), F.Snapshot().Day, 35);
     TestEqual(TEXT("Final phase"), F.Snapshot().Phase, EGamePhase::End);
-    TestEqual(TEXT("Low-enlightenment ending"), F.Snapshot().Ending, EShopEnding::Cycle);
+    TestEqual(TEXT("Funded low-enlightenment ending"), F.Snapshot().Ending, EShopEnding::Redeemed);
     FEndingData Ending;
-    TestTrue(TEXT("Ending is table-configured"), F.Run->GetEndingInfo(EShopEnding::Cycle, Ending));
+    TestTrue(TEXT("Ending is table-configured"), F.Run->GetEndingInfo(EShopEnding::Redeemed, Ending));
     TestEqual(TEXT("UI receives authored ending text"), F.Snapshot().EndMessage.ToString(), Ending.Text.ToString());
     TestTrue(TEXT("New run resets after ending"), F.Run->RequestNewRun_Implementation());
     TestEqual(TEXT("Reset day"), F.Snapshot().Day, 1);
@@ -209,7 +209,7 @@ bool FReleaseSettingsInitialization::RunTest(const FString&)
     TestEqual(TEXT("Default settings load sixteen real books"), Run->GetBookIds().Num(), 16);
     TestTrue(TEXT("Start directly from configured settings"), Run->RequestNewRun_Implementation());
     TestEqual(TEXT("Initialization uses the selected rule's starting psychic"), Run->GetSnapshot_Implementation().Psychic, ExpectedRules->StartPsychic);
-    TestEqual(TEXT("Release uses the full calendar"), Run->GetSnapshot_Implementation().MaxDays, 35);
+    TestEqual(TEXT("Runtime uses the selected calendar"), Run->GetSnapshot_Implementation().MaxDays, ExpectedRules->MaxDays);
     FBookData Book; int32 Stock = 0;
     TestTrue(TEXT("Progressive book is available"), Run->GetBookInfo_Implementation(TEXT("book_novel_03"), Book, Stock));
     TestEqual(TEXT("Configured sale chance is fifty percent"), Book.SaleEnlightenChance, 0.5f);
@@ -219,10 +219,10 @@ bool FReleaseSettingsInitialization::RunTest(const FString&)
     TestEqual(TEXT("Configured initial secret is already owned"), Secret.Stock, 1);
     TestEqual(TEXT("Configured initial secret is unlisted"), Secret.ListedCopies, 0);
     TestEqual(TEXT("Configured initial secret is stored"), Secret.StoredCopies, 1);
-    for (EShopEnding Ending : { EShopEnding::Closed, EShopEnding::PollutionReleased, EShopEnding::Returned, EShopEnding::Cycle })
+    for (EShopEnding Ending : { EShopEnding::Closed, EShopEnding::PollutionReleased, EShopEnding::Returned, EShopEnding::FailedRedemption, EShopEnding::Redeemed })
     {
         FEndingData Data;
-        TestTrue(TEXT("Configured ending table supplies all four endings"), Run->GetEndingInfo(Ending, Data));
+        TestTrue(TEXT("Configured ending table supplies all five endings"), Run->GetEndingInfo(Ending, Data));
         TestFalse(TEXT("Configured ending text is nonempty"), Data.Text.IsEmpty());
     }
     Run->Deinitialize();
